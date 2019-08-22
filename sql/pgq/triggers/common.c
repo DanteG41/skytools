@@ -21,12 +21,14 @@
 #include <commands/trigger.h>
 #include <catalog/pg_type.h>
 #include <catalog/pg_namespace.h>
+#include <catalog/pg_operator.h>
 #include <executor/spi.h>
 #include <lib/stringinfo.h>
 #include <utils/memutils.h>
 #include <utils/inval.h>
 #include <utils/hsearch.h>
 #include <utils/syscache.h>
+#include <utils/typcache.h>
 #include <utils/builtins.h>
 #include <utils/rel.h>
 
@@ -60,7 +62,7 @@ static MemoryContext tbl_cache_ctx;
 static HTAB *tbl_cache_map;
 
 static const char pkey_sql[] =
-    "SELECT k.attnum, k.attname FROM pg_index i, pg_attribute k"
+    "SELECT k.attnum, k.attname FROM pg_catalog.pg_index i, pg_catalog.pg_attribute k"
     " WHERE i.indrelid = $1 AND k.attrelid = i.indexrelid"
     "   AND i.indisprimary AND k.attnum > 0 AND NOT k.attisdropped"
     " ORDER BY k.attnum";
@@ -125,9 +127,9 @@ static void fill_magic_columns(PgqTriggerEvent *ev)
 
 	for (i = 0; i < tupdesc->natts; i++) {
 		/* Skip dropped columns */
-		if (tupdesc->attrs[i]->attisdropped)
+		if (TupleDescAttr(tupdesc, i)->attisdropped)
 			continue;
-		col_name = NameStr(tupdesc->attrs[i]->attname);
+		col_name = NameStr(TupleDescAttr(tupdesc, i)->attname);
 		if (!is_magic_field(col_name))
 			continue;
 		if (strcmp(col_name, "_pgq_ev_type") == 0)
@@ -174,7 +176,7 @@ void pgq_insert_tg_event(PgqTriggerEvent *ev)
 			  pgq_finish_varbuf(ev->field[EV_EXTRA4]));
 }
 
-static char *find_table_name(Relation rel)
+static char *find_table_name(Relation rel, StringInfo jsbuf)
 {
 	Oid nsoid = rel->rd_rel->relnamespace;
 	char namebuf[NAMEDATALEN * 2 + 3];
@@ -192,6 +194,12 @@ static char *find_table_name(Relation rel)
 
 	/* fill name */
 	snprintf(namebuf, sizeof(namebuf), "%s.%s", nspname, tname);
+
+	appendStringInfoString(jsbuf, ",\"table\":[");
+	pgq_encode_cstring(jsbuf, nspname, TBUF_QUOTE_JSON);
+	appendStringInfoChar(jsbuf, ',');
+	pgq_encode_cstring(jsbuf, tname, TBUF_QUOTE_JSON);
+	appendStringInfoChar(jsbuf, ']');
 
 	ReleaseSysCache(ns_tup);
 	return pstrdup(namebuf);
@@ -216,9 +224,14 @@ static void init_cache(void)
 	 */
 	tbl_cache_ctx = AllocSetContextCreate(TopMemoryContext,
 					      "pgq_triggers table info",
+#if (PG_VERSION_NUM >= 110000)
+					      ALLOCSET_SMALL_SIZES
+#else
 					      ALLOCSET_SMALL_MINSIZE,
 					      ALLOCSET_SMALL_INITSIZE,
-					      ALLOCSET_SMALL_MAXSIZE);
+					      ALLOCSET_SMALL_MAXSIZE
+#endif
+					      );
 
 	/*
 	 * init pkey cache.
@@ -274,11 +287,16 @@ static void fill_tbl_info(Relation rel, struct PgqTableInfo *info)
 {
 	StringInfo pkeys;
 	Datum values[1];
-	const char *name = find_table_name(rel);
+	const char *name;
 	TupleDesc desc;
 	HeapTuple row;
 	bool isnull;
 	int res, i, attno;
+	StringInfo jsbuf;
+
+	jsbuf = makeStringInfo();
+	name = find_table_name(rel, jsbuf);
+	appendStringInfoString(jsbuf, ",\"pkey\":[");
 
 	/* load pkeys */
 	values[0] = ObjectIdGetDatum(rel->rd_id);
@@ -302,11 +320,16 @@ static void fill_tbl_info(Relation rel, struct PgqTableInfo *info)
 		attno = DatumGetInt16(SPI_getbinval(row, desc, 1, &isnull));
 		name = SPI_getvalue(row, desc, 2);
 		info->pkey_attno[i] = attno;
-		if (i > 0)
+		if (i > 0) {
 			appendStringInfoChar(pkeys, ',');
+			appendStringInfoChar(jsbuf, ',');
+		}
 		appendStringInfoString(pkeys, name);
+		pgq_encode_cstring(jsbuf, name, TBUF_QUOTE_JSON);
 	}
+	appendStringInfoChar(jsbuf, ']');
 	info->pkey_list = MemoryContextStrdup(tbl_cache_ctx, pkeys->data);
+	info->json_info = MemoryContextStrdup(tbl_cache_ctx, jsbuf->data);
 	info->tg_cache = NULL;
 }
 
@@ -337,6 +360,8 @@ static void clean_info(struct PgqTableInfo *info, bool found)
 		pfree(info->pkey_attno);
 	if (info->pkey_list)
 		pfree((void *)info->pkey_list);
+	if (info->json_info)
+		pfree((void *)info->json_info);
 
 uninitialized:
 	info->tg_cache = NULL;
@@ -345,6 +370,7 @@ uninitialized:
 	info->pkey_list = NULL;
 	info->n_pkeys = 0;
 	info->invalid = true;
+	info->json_info = NULL;
 }
 
 /*
@@ -481,7 +507,7 @@ static void parse_oldstyle_args(PgqTriggerEvent *ev, TriggerData *tg)
 	 */
 	tupdesc = tg->tg_relation->rd_att;
 	for (i = 0, attcnt = 0; i < tupdesc->natts; i++) {
-		if (!tupdesc->attrs[i]->attisdropped)
+		if (!TupleDescAttr(tupdesc, i)->attisdropped)
 			attcnt++;
 	}
 
@@ -517,16 +543,21 @@ void pgq_prepare_event(struct PgqTriggerEvent *ev, TriggerData *tg, bool newstyl
 	/*
 	 * check operation type
 	 */
-	if (TRIGGER_FIRED_BY_INSERT(tg->tg_event))
+	if (TRIGGER_FIRED_BY_INSERT(tg->tg_event)) {
 		ev->op_type = 'I';
-	else if (TRIGGER_FIRED_BY_UPDATE(tg->tg_event))
+		ev->op_type_str = "INSERT";
+	} else if (TRIGGER_FIRED_BY_UPDATE(tg->tg_event)) {
 		ev->op_type = 'U';
-	else if (TRIGGER_FIRED_BY_DELETE(tg->tg_event))
+		ev->op_type_str = "UPDATE";
+	} else if (TRIGGER_FIRED_BY_DELETE(tg->tg_event)) {
 		ev->op_type = 'D';
-	else if (TRIGGER_FIRED_BY_TRUNCATE(tg->tg_event))
+		ev->op_type_str = "DELETE";
+	} else if (TRIGGER_FIRED_BY_TRUNCATE(tg->tg_event)) {
 		ev->op_type = 'R';
-	else
+		ev->op_type_str = "TRUNCATE";
+	} else {
 		elog(ERROR, "unknown event for pgq trigger");
+	}
 
 	/*
 	 * load table info
@@ -568,8 +599,8 @@ void pgq_prepare_event(struct PgqTriggerEvent *ev, TriggerData *tg, bool newstyl
 	}
 
 	if (ev->tgargs->deny) {
-		elog(ERROR, "Table '%s' to queue '%s': change not allowed (%c)",
-		     ev->table_name, ev->queue_name, ev->op_type);
+		elog(ERROR, "Table '%s' to queue '%s': change not allowed (%s)",
+		     ev->table_name, ev->queue_name, ev->op_type_str);
 	}
 
 	/*
@@ -598,9 +629,9 @@ bool pgqtriga_skip_col(PgqTriggerEvent *ev, int i, int attkind_idx)
 	const char *name;
 
 	tupdesc = tg->tg_relation->rd_att;
-	if (tupdesc->attrs[i]->attisdropped)
+	if (TupleDescAttr(tupdesc, i)->attisdropped)
 		return true;
-	name = NameStr(tupdesc->attrs[i]->attname);
+	name = NameStr(TupleDescAttr(tupdesc, i)->attname);
 
 	if (is_magic_field(name)) {
 		ev->tgargs->custom_fields = 1;
@@ -632,9 +663,9 @@ bool pgqtriga_is_pkey(PgqTriggerEvent *ev, int i, int attkind_idx)
 		return ev->attkind[attkind_idx] == 'k';
 	} else if (ev->pkey_list) {
 		tupdesc = tg->tg_relation->rd_att;
-		if (tupdesc->attrs[i]->attisdropped)
+		if (TupleDescAttr(tupdesc, i)->attisdropped)
 			return false;
-		name = NameStr(tupdesc->attrs[i]->attname);
+		name = NameStr(TupleDescAttr(tupdesc, i)->attname);
 		if (is_magic_field(name)) {
 			ev->tgargs->custom_fields = 1;
 			return false;
@@ -770,7 +801,7 @@ static void override_fields(struct PgqTriggerEvent *ev)
 		if (res != SPI_OK_SELECT)
 			elog(ERROR, "Override query failed");
 		if (SPI_processed != 1)
-			elog(ERROR, "Expect 1 row from override query, got %d", SPI_processed);
+			elog(ERROR, "Expect 1 row from override query, got %d", (int)SPI_processed);
 
 		/* special handling for EV_WHEN */
 		if (i == EV_WHEN) {
@@ -799,5 +830,107 @@ static void override_fields(struct PgqTriggerEvent *ev)
 			appendStringInfoString(ev->field[i], val);
 		}
 	}
+}
+
+/*
+ * need to ignore UPDATE where only ignored columns change
+ */
+int pgq_is_interesting_change(PgqTriggerEvent *ev, TriggerData *tg)
+{
+	HeapTuple old_row = tg->tg_trigtuple;
+	HeapTuple new_row = tg->tg_newtuple;
+	TupleDesc tupdesc = tg->tg_relation->rd_att;
+	Datum old_value;
+	Datum new_value;
+	bool old_isnull;
+	bool new_isnull;
+	bool is_pk;
+
+	int i, attkind_idx = -1;
+	int ignore_count = 0;
+
+	/* only UPDATE may need to be ignored */
+	if (!TRIGGER_FIRED_BY_UPDATE(tg->tg_event))
+		return 1;
+
+	for (i = 0; i < tupdesc->natts; i++) {
+		/*
+		 * Ignore dropped columns
+		 */
+		if (TupleDescAttr(tupdesc, i)->attisdropped)
+			continue;
+		attkind_idx++;
+
+		is_pk = pgqtriga_is_pkey(ev, i, attkind_idx);
+		if (!is_pk && ev->tgargs->ignore_list == NULL)
+			continue;
+
+		old_value = SPI_getbinval(old_row, tupdesc, i + 1, &old_isnull);
+		new_value = SPI_getbinval(new_row, tupdesc, i + 1, &new_isnull);
+
+		/*
+		 * If old and new value are NULL, the column is unchanged
+		 */
+		if (old_isnull && new_isnull)
+			continue;
+
+		/*
+		 * If both are NOT NULL, we need to compare the values and skip
+		 * setting the column if equal
+		 */
+		if (!old_isnull && !new_isnull) {
+			Oid opr_oid;
+			FmgrInfo *opr_finfo_p;
+
+			/*
+			 * Lookup the equal operators function call info using the
+			 * typecache if available
+			 */
+			TypeCacheEntry *type_cache;
+
+			type_cache = lookup_type_cache(SPI_gettypeid(tupdesc, i + 1),
+						       TYPECACHE_EQ_OPR | TYPECACHE_EQ_OPR_FINFO);
+			opr_oid = type_cache->eq_opr;
+			if (opr_oid == ARRAY_EQ_OP)
+				opr_oid = InvalidOid;
+			else
+				opr_finfo_p = &(type_cache->eq_opr_finfo);
+
+			/*
+			 * If we have an equal operator, use that to do binary
+			 * comparison. Else get the string representation of both
+			 * attributes and do string comparison.
+			 */
+			if (OidIsValid(opr_oid)) {
+				if (DatumGetBool(FunctionCall2(opr_finfo_p, old_value, new_value)))
+					continue;
+			} else {
+				char *old_strval = SPI_getvalue(old_row, tupdesc, i + 1);
+				char *new_strval = SPI_getvalue(new_row, tupdesc, i + 1);
+
+				if (strcmp(old_strval, new_strval) == 0)
+					continue;
+			}
+		}
+
+		if (is_pk)
+			elog(ERROR, "primary key update not allowed");
+
+		if (pgqtriga_skip_col(ev, i, attkind_idx)) {
+			/* this change should be ignored */
+			ignore_count++;
+			continue;
+		}
+
+		/* a non-ignored column has changed */
+		return 1;
+	}
+
+	/* skip if only ignored column had changed */
+	if (ignore_count)
+		return 0;
+
+	/* do show NOP updates */
+	return 1;
 }
 

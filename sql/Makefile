@@ -1,7 +1,7 @@
 
 include ../config.mak
 
-SUBDIRS = londiste pgq pgq_coop pgq_ext pgq_node ticker txid
+SUBDIRS = londiste pgq pgq_coop pgq_ext pgq_node ticker
 
 all install clean distclean installcheck test:
 	for dir in $(SUBDIRS); do \

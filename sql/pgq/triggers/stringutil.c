@@ -18,9 +18,11 @@
 
 #include <postgres.h>
 #include <lib/stringinfo.h>
-#include <mb/pg_wchar.h>
-#include <parser/keywords.h>
 #include <utils/memutils.h>
+#include <utils/builtins.h>
+#if PG_VERSION_NUM >= 90200
+#include <utils/json.h>
+#endif
 
 #include "stringutil.h"
 
@@ -28,6 +30,26 @@
 #define SET_VARSIZE(x, len) VARATT_SIZEP(x) = len
 #endif
 
+#if PG_VERSION_NUM < 90100
+static char *quote_literal_cstr(const char *str)
+{
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+
+	if (strchr(str, '\\'))
+		appendStringInfoCharMacro(&buf, 'E');
+
+	appendStringInfoCharMacro(&buf, '\'');
+	for (; *str; str++) {
+		if (*str == '\'' || *str == '\\')
+			appendStringInfoCharMacro(&buf, *str);
+		appendStringInfoCharMacro(&buf, *str);
+	}
+	appendStringInfoCharMacro(&buf, '\'');
+	return buf.data;
+}
+#endif
 
 StringInfo pgq_init_varbuf(void)
 {
@@ -86,192 +108,95 @@ loop:
  * quoting
  */
 
-static int pgq_urlencode(char *dst, const uint8 *src, int srclen)
+static void pgq_urlencode(StringInfo buf, const char *src)
 {
 	static const char hextbl[] = "0123456789abcdef";
-	const uint8 *end = src + srclen;
-	char *p = dst;
-	while (src < end) {
-		unsigned c = *src++;
+	while (*src) {
+		unsigned c = (unsigned char)*src++;
 		if (c == ' ') {
-			*p++ = '+';
+			appendStringInfoCharMacro(buf, '+');
 		} else if ((c >= '0' && c <= '9')
 			   || (c >= 'A' && c <= 'Z')
 			   || (c >= 'a' && c <= 'z')
 			   || c == '_' || c == '.' || c == '-') {
-			*p++ = c;
+			appendStringInfoCharMacro(buf, c);
 		} else {
-			*p++ = '%';
-			*p++ = hextbl[c >> 4];
-			*p++ = hextbl[c & 15];
+			appendStringInfoCharMacro(buf, '%');
+			appendStringInfoCharMacro(buf, hextbl[c >> 4]);
+			appendStringInfoCharMacro(buf, hextbl[c & 15]);
 		}
 	}
-	return p - dst;
 }
 
-static int pgq_quote_literal(char *dst, const uint8 *src, int srclen)
+static void pgq_quote_literal(StringInfo buf, const char *src)
 {
-	const uint8 *cp1 = src, *src_end = src + srclen;
-	char *cp2 = dst;
-	bool is_ext = false;
-
-	*cp2++ = '\'';
-	while (cp1 < src_end) {
-		int wl = pg_mblen((const char *)cp1);
-		if (wl != 1) {
-			while (wl-- > 0 && cp1 < src_end)
-				*cp2++ = *cp1++;
-			continue;
-		}
-
-		if (*cp1 == '\'') {
-			*cp2++ = '\'';
-		} else if (*cp1 == '\\') {
-			if (!is_ext) {
-				/* make room for 'E' */
-				memmove(dst + 1, dst, cp2 - dst);
-				*dst = 'E';
-				is_ext = true;
-				cp2++;
-			}
-			*cp2++ = '\\';
-		}
-		*cp2++ = *cp1++;
-	}
-	*cp2++ = '\'';
-
-	return cp2 - dst;
-}
-
-/* check if ident is keyword that needs quoting */
-static bool is_keyword(const char *ident)
-{
-	const ScanKeyword *kw;
-
-	/* do the lookup */
-#if PG_VERSION_NUM >= 80500
-	kw = ScanKeywordLookup(ident, ScanKeywords, NumScanKeywords);
-#else
-	kw = ScanKeywordLookup(ident);
-#endif
-
-	/* unreserved? */
-#if PG_VERSION_NUM >= 80300
-	if (kw && kw->category == UNRESERVED_KEYWORD)
-		return false;
-#endif
-
-	/* found anything? */
-	return kw != NULL;
+	const char *quoted = quote_literal_cstr(src);
+	appendStringInfoString(buf, quoted);
+	pfree((char*)quoted);
 }
 
 /*
  * pgq_quote_ident - Quote an identifier only if needed
  */
-static int pgq_quote_ident(char *dst, const uint8 *src, int srclen)
+static void pgq_quote_ident(StringInfo buf, const char *src)
 {
-	/*
-	 * Can avoid quoting if ident starts with a lowercase letter or
-	 * underscore and contains only lowercase letters, digits, and
-	 * underscores, *and* is not any SQL keyword.  Otherwise, supply
-	 * quotes.
-	 */
-	int nquotes = 0;
-	bool safe;
-	const char *ptr;
-	char *optr;
-	char ident[NAMEDATALEN + 1];
-
-	/* expect idents be not bigger than NAMEDATALEN */
-	if (srclen > NAMEDATALEN)
-		srclen = NAMEDATALEN;
-	memcpy(ident, src, srclen);
-	ident[srclen] = 0;
-
-	/*
-	 * would like to use <ctype.h> macros here, but they might yield
-	 * unwanted locale-specific results...
-	 */
-	safe = ((ident[0] >= 'a' && ident[0] <= 'z') || ident[0] == '_');
-
-	for (ptr = ident; *ptr; ptr++) {
-		char ch = *ptr;
-
-		if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || (ch == '_'))
-			continue;	/* okay */
-
-		safe = false;
-		if (ch == '"')
-			nquotes++;
-	}
-
-	if (safe) {
-		if (is_keyword(ident))
-			safe = false;
-	}
-
-	optr = dst;
-	if (!safe)
-		*optr++ = '"';
-
-	for (ptr = ident; *ptr; ptr++) {
-		char ch = *ptr;
-
-		if (ch == '"')
-			*optr++ = '"';
-		*optr++ = ch;
-	}
-	if (!safe)
-		*optr++ = '"';
-
-	return optr - dst;
+	const char *quoted = quote_identifier(src);
+	appendStringInfoString(buf, quoted);
+	if (quoted != src)
+		pfree((char *)quoted);
 }
 
-static char *start_append(StringInfo buf, int alloc_len)
+#if PG_VERSION_NUM < 90200
+
+static void escape_json(StringInfo buf, const char *p)
 {
-	enlargeStringInfo(buf, alloc_len);
-	return buf->data + buf->len;
-}
-
-static void finish_append(StringInfo buf, int final_len)
-{
-	if (buf->len + final_len > buf->maxlen)
-		elog(FATAL, "buffer overflow");
-	buf->len += final_len;
-}
-
-
-static void tbuf_encode_data(StringInfo buf, const uint8 *data, int len, enum PgqEncode encoding)
-{
-	int dlen = 0;
-	char *dst;
-
-	switch (encoding) {
-	case TBUF_QUOTE_LITERAL:
-		dst = start_append(buf, len * 2 + 3);
-		dlen = pgq_quote_literal(dst, data, len);
-		break;
-
-	case TBUF_QUOTE_IDENT:
-		dst = start_append(buf, len * 2 + 2);
-		dlen = pgq_quote_ident(dst, data, len);
-		break;
-
-	case TBUF_QUOTE_URLENC:
-		dst = start_append(buf, len * 3 + 2);
-		dlen = pgq_urlencode(dst, data, len);
-		break;
-
-	default:
-		elog(ERROR, "bad encoding");
+	appendStringInfoCharMacro(buf, '\"');
+	for (; *p; p++) {
+		switch (*p) {
+		case '\b': appendStringInfoString(buf, "\\b"); break;
+		case '\f': appendStringInfoString(buf, "\\f"); break;
+		case '\n': appendStringInfoString(buf, "\\n"); break;
+		case '\r': appendStringInfoString(buf, "\\r"); break;
+		case '\t': appendStringInfoString(buf, "\\t"); break;
+		case '"': appendStringInfoString(buf, "\\\""); break;
+		case '\\': appendStringInfoString(buf, "\\\\"); break;
+		default:
+			   if ((unsigned char) *p < ' ')
+				   appendStringInfo(buf, "\\u%04x", (int) *p);
+			   else
+				   appendStringInfoCharMacro(buf, *p);
+			   break;
+		}
 	}
-
-	finish_append(buf, dlen);
+	appendStringInfoCharMacro(buf, '\"');
 }
+
+#endif
 
 void pgq_encode_cstring(StringInfo tbuf, const char *str, enum PgqEncode encoding)
 {
 	if (str == NULL)
 		elog(ERROR, "tbuf_encode_cstring: NULL");
-	tbuf_encode_data(tbuf, (const uint8 *)str, strlen(str), encoding);
+
+	switch (encoding) {
+	case TBUF_QUOTE_LITERAL:
+		pgq_quote_literal(tbuf, str);
+		break;
+
+	case TBUF_QUOTE_IDENT:
+		pgq_quote_ident(tbuf, str);
+		break;
+
+	case TBUF_QUOTE_URLENC:
+		pgq_urlencode(tbuf, str);
+		break;
+
+	case TBUF_QUOTE_JSON:
+		escape_json(tbuf, str);
+		break;
+
+	default:
+		elog(ERROR, "bad encoding");
+	}
 }
+
