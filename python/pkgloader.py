@@ -27,7 +27,7 @@ def _load_pkg_cache():
         modname = m.group(1)
         modver = (int(m.group(2)), int(m.group(3)))
         _pkg_cache.setdefault(modname, []).append((modver, dir))
-    for vlist in _pkg_cache.itervalues():
+    for vlist in _pkg_cache.values():
         vlist.sort(reverse = True)
     return _pkg_cache
 

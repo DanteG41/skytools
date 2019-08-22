@@ -84,11 +84,11 @@ def proc_func(f, ln):
             pre_list.append(fix_func(ln))
 
     if len(comm_list) > 2:
-        map(sys.stdout.write, comm_list)
-        map(sys.stdout.write, pre_list)
+        list(map(sys.stdout.write, comm_list))
+        list(map(sys.stdout.write, pre_list))
     else:
-        map(sys.stdout.write, pre_list)
-        map(sys.stdout.write, comm_list)
+        list(map(sys.stdout.write, pre_list))
+        list(map(sys.stdout.write, comm_list))
     if ln:
         sys.stdout.write(fix_func(ln))
 
@@ -124,8 +124,8 @@ def main():
 
     try:
         opts, args = getopt.gnu_getopt(sys.argv[1:], 'h', ['ndoc'])
-    except getopt.error, d:
-        print(str(d))
+    except (getopt.error) as err:
+        print(str(err))
         usage(1)
     for o, v in opts:
         if o == "-h":

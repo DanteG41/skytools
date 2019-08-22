@@ -10,39 +10,29 @@ datetime_to_timestamp:
 
 """
 
+from __future__ import division, absolute_import, print_function
+
 import re
 import time
 from datetime import datetime, timedelta, tzinfo
 
 __all__ = ['parse_iso_timestamp', 'FixedOffsetTimezone', 'datetime_to_timestamp']
 
-try:
-    timedelta.total_seconds # new in 2.7
-except AttributeError:
-    def total_seconds(td):
-        return float (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6
-
-    import ctypes
-    _get_dict = ctypes.pythonapi._PyObject_GetDictPtr
-    _get_dict.restype = ctypes.POINTER(ctypes.py_object)
-    _get_dict.argtypes = [ctypes.py_object]
-    d = _get_dict(timedelta)[0]
-    d['total_seconds'] = total_seconds
-
-
 class FixedOffsetTimezone(tzinfo):
     """Fixed offset in minutes east from UTC."""
     __slots__ = ('__offset', '__name')
 
     def __init__(self, offset):
-        self.__offset = timedelta(minutes = offset)
+        super(FixedOffsetTimezone, self).__init__()
+
+        self.__offset = timedelta(minutes=offset)
 
         # numeric tz name
         h, m = divmod(abs(offset), 60)
         if offset < 0:
             h = -h
         if m:
-            self.__name = "%+03d:%02d" % (h,m)
+            self.__name = "%+03d:%02d" % (h, m)
         else:
             self.__name = "%+03d" % h
 
@@ -79,9 +69,9 @@ _iso_regex = r"""
     """
 _iso_rc = None
 
-def parse_iso_timestamp(s, default_tz = None):
+def parse_iso_timestamp(s, default_tz=None):
     """Parse ISO timestamp to datetime object.
-    
+
     YYYY-MM-DD[ T]HH:MM[:SS[.ss]][-+HH[:MM]]
 
     Assumes that second fractions are zero-trimmed from the end,
@@ -107,6 +97,11 @@ def parse_iso_timestamp(s, default_tz = None):
     '2005-06-01 15:00 -0530 -05:30'
     >>> parse_iso_timestamp('2014-10-27T11:59:13Z').strftime('%Y-%m-%d %H:%M:%S %z %Z')
     '2014-10-27 11:59:13 +0000 +00'
+    >>> parse_iso_timestamp('2014.10.27')
+    Traceback (most recent call last):
+        ...
+    ValueError: Date not in ISO format: '2014.10.27'
+
     """
 
     global _iso_rc
@@ -183,8 +178,4 @@ def datetime_to_timestamp(dt, local_time=True):
     else:
         delta = dt - UTC_NOTZ_EPOCH
         return delta.total_seconds()
-
-if __name__ == '__main__':
-    import doctest
-    doctest.testmod()
 

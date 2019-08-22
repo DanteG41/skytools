@@ -806,9 +806,9 @@ class AdminConsole:
         lswitches = ['help', 'version']
         try:
             opts, args = getopt.getopt(argv, switches, lswitches)
-        except getopt.GetoptError, ex:
-            print str(ex)
-            print "Use --help to see command line options"
+        except(getopt.GetoptError) as err:
+            print(str(err))
+            print("Use --help to see command line options")
             sys.exit(1)
 
         cstr_map = {
@@ -821,10 +821,10 @@ class AdminConsole:
         cmd_file = cmd_str = None
         for o, a in opts:
             if o == "--help":
-                print cmdline_usage
+                print(cmdline_usage)
                 sys.exit(0)
             elif o == "--version":
-                print "qadmin version %s" % __version__
+                print("qadmin version %s" % __version__)
                 sys.exit(0)
             elif o == "-h":
                 cstr_map['host'] = a
@@ -852,7 +852,7 @@ class AdminConsole:
             else:
                 cstr_list.append("dbname=%s" % a)
         elif len(args) > 1:
-            print "too many arguments, use --help to see syntax"
+            print("too many arguments, use --help to see syntax")
             sys.exit(1)
 
         self.initial_connstr = " ".join(cstr_list)
@@ -875,7 +875,7 @@ class AdminConsole:
         except psycopg2.ProgrammingError:
             self.pgq_version = "<none>"
         if not quiet:
-            print "qadmin (%s, server %s, pgq %s)" % (__version__, self.server_version, self.pgq_version)
+            print("qadmin (%s, server %s, pgq %s)" % (__version__, self.server_version, self.pgq_version))
             #print "Connected to %r" % connstr
         return db
 
@@ -883,7 +883,7 @@ class AdminConsole:
         self.parse_cmdline(argv)
 
         if self.cmd_file is not None and self.cmd_str is not None:
-            print "cannot handle -c and -f together"
+            print("cannot handle -c and -f together")
             sys.exit(1)
 
         # append ; to cmd_str if needed
@@ -896,8 +896,8 @@ class AdminConsole:
 
         try:
             self.db = self.db_connect(self.initial_connstr, quiet=True)
-        except psycopg2.Error, d:
-            print str(d).strip()
+        except(psycopg2.Error) as err:
+            print(str(err).strip())
             sys.exit(1)
 
         if cmd_str:
@@ -918,8 +918,8 @@ class AdminConsole:
         except IOError:
             pass
 
-        print "Welcome to qadmin %s (server %s), the PgQ interactive terminal." % (__version__, self.server_version)
-        print "Use 'show help;' to see available commands."
+        print("Welcome to qadmin %s (server %s), the PgQ interactive terminal." % (__version__, self.server_version))
+        print("Use 'show help;' to see available commands.")
         while 1:
             try:
                 ln = self.line_input()
@@ -929,8 +929,8 @@ class AdminConsole:
             except EOFError:
                 print
                 break
-            except psycopg2.Error, d:
-                print 'ERROR:', str(d).strip()
+            except(psycopg2.Error) as err:
+                print('ERROR:', str(err).strip())
             except Exception:
                 traceback.print_exc()
             self.reset_comp_cache()
@@ -954,8 +954,8 @@ class AdminConsole:
     def rl_completer_safe(self, curword, state):
         try:
             return self.rl_completer(curword, state)
-        except BaseException, det:
-            print 'got some error', str(det)
+        except(BaseException) as err:
+            print('got some error', str(err))
 
     def line_input(self):
         qname = "(noqueue)"
@@ -1035,12 +1035,12 @@ class AdminConsole:
             self.tokens.append((typ, w))
             w = normalize_any(typ, w)
             if typ == 'error':
-                print 'syntax error 1:', repr(ln)
+                print('syntax error 1:', repr(ln))
                 return
             onode = node
             node = node.get_next(typ, w, params)
             if not node:
-                print "syntax error 2:", repr(ln), repr(typ), repr(w), repr(params)
+                print("syntax error 2:", repr(ln), repr(typ), repr(w), repr(params))
                 return
             if node == top_level:
                 self.exec_params(params)
@@ -1050,7 +1050,7 @@ class AdminConsole:
             if params:
                 self.exec_params(params)
         elif node != top_level:
-            print "multi-line commands not supported:", repr(ln)
+            print("multi-line commands not supported:", repr(ln))
 
     def exec_params(self, params):
         #print 'RUN', params
@@ -1058,7 +1058,7 @@ class AdminConsole:
         cmd2 = params.get('cmd2')
         cmd3 = params.get('cmd3')
         if not cmd:
-            print 'parse error: no command found'
+            print('parse error: no command found')
             return
         if cmd2:
             cmd = "%s_%s" % (cmd, cmd2)
@@ -1072,7 +1072,7 @@ class AdminConsole:
         qname = params.get('queue', self.cur_queue)
 
         if 'node' in params and not qname:
-            print 'node= needs a queue also'
+            print('node= needs a queue also')
             return
 
         # load raw connection params
@@ -1085,7 +1085,7 @@ class AdminConsole:
         # raw connect
         if cdata:
             if 'node' in params:
-                print 'node= cannot be used together with raw params'
+                print('node= cannot be used together with raw params')
                 return
             cstr = " ".join(cdata)
             self.db = self.db_connect(cstr)
@@ -1097,7 +1097,7 @@ class AdminConsole:
             curs.execute(q, [qname])
             res = curs.fetchall()
             if len(res) == 0:
-                print 'queue not found'
+                print('queue not found')
                 return
 
             if 'node' in params:
@@ -1106,7 +1106,7 @@ class AdminConsole:
                 curs.execute(q, [qname, params['node']])
                 res = curs.fetchall()
                 if len(res) == 0:
-                    print "node not found"
+                    print("node not found")
                     return
                 cstr = res[0]['node_location']
                 self.db = self.db_connect(cstr)
@@ -1115,12 +1115,12 @@ class AdminConsole:
         if 'queue' in params:
             self.cur_queue = qname
 
-        print "CONNECT"
+        print("CONNECT")
 
     def cmd_show_version (self, params):
-        print "qadmin version %s" % __version__
-        print "server version %s" % self.server_version
-        print "pgq version %s" % self.pgq_version
+        print("qadmin version %s" % __version__)
+        print("server version %s" % self.server_version)
+        print("pgq version %s" % self.pgq_version)
 
     def cmd_install(self, params):
         pgq_objs = [
@@ -1141,11 +1141,11 @@ class AdminConsole:
         mod_name = params['module']
         objs = mod_map[mod_name]
         if not self.db:
-            print "no db?"
+            print("no db?")
             return
         curs = self.db.cursor()
         skytools.db_install(curs, objs, None)
-        print "INSTALL"
+        print("INSTALL")
 
     def cmd_show_queue(self, params):
         queue = params.get('queue')
@@ -1219,7 +1219,7 @@ class AdminConsole:
         consumer = params.get('consumer')
         queue = self.cur_queue
         if not queue:
-            print 'No default queue'
+            print('No default queue')
             return
         curs = self.db.cursor()
         if consumer:
@@ -1227,11 +1227,11 @@ class AdminConsole:
             curs.execute(q, [queue, consumer])
             res = curs.fetchall()
             if len(res) != 1:
-                print 'no such consumer'
+                print('no such consumer')
                 return
             batch_id = res[0]['current_batch']
             if batch_id is None:
-                print 'consumer has no open batch'
+                print('consumer has no open batch')
                 return
 
         q = "select * from pgq.get_batch_events(%s)"
@@ -1242,7 +1242,7 @@ class AdminConsole:
     def cmd_register_consumer(self, params):
         queue = params.get("queue", self.cur_queue)
         if not queue:
-            print 'No queue specified'
+            print('No queue specified')
             return
         at_tick = params.get('at_tick')
         copy_reg = params.get('copy_reg')
@@ -1255,7 +1255,7 @@ class AdminConsole:
             curs.execute(q, [queue, copy_reg])
             reg = curs.fetchone()
             if not reg:
-                print "Consumer %s not registered on queue %d" % (copy_reg, queue)
+                print("Consumer %s not registered on queue %d" % (copy_reg, queue))
                 return
             at_tick = reg['pos']
 
@@ -1264,7 +1264,7 @@ class AdminConsole:
             q = "select * from pgq.get_consumer_info(%s, %s)"
             curs.execute(q, [queue, consumer])
             if curs.fetchone():
-                print 'Consumer already registered'
+                print('Consumer already registered')
                 return
 
         if at_tick:
@@ -1273,17 +1273,17 @@ class AdminConsole:
         else:
             q = "select * from pgq.register_consumer(%s, %s)"
             curs.execute(q, [queue, consumer])
-        print "REGISTER"
+        print("REGISTER")
 
     def cmd_register_subconsumer(self, params):
         queue = params.get("queue", self.cur_queue)
         if not queue:
-            print 'No queue specified'
+            print('No queue specified')
             return
         subconsumer = params['subconsumer']
         consumer = params.get("consumer")
         if not consumer:
-            print 'No consumer specified'
+            print('No consumer specified')
             return
         curs = self.db.cursor()
 
@@ -1292,17 +1292,17 @@ class AdminConsole:
         q = "select * from pgq.get_consumer_info(%s, %s)"
         curs.execute(q, [queue, _subcon_name])
         if curs.fetchone():
-            print 'Subconsumer already registered'
+            print('Subconsumer already registered')
             return
 
         q = "select * from pgq_coop.register_subconsumer(%s, %s, %s)"
         curs.execute(q, [queue, consumer, subconsumer])
-        print "REGISTER"
+        print("REGISTER")
 
     def cmd_unregister_consumer(self, params):
         queue = params.get("queue", self.cur_queue)
         if not queue:
-            print 'No queue specified'
+            print('No queue specified')
             return
         consumer = params['consumer']
         curs = self.db.cursor()
@@ -1315,12 +1315,12 @@ class AdminConsole:
         q = "select * from pgq.unregister_consumer(%s, %s)"
         for consumer in consumers:
             curs.execute(q, [queue, consumer])
-        print "UNREGISTER"
+        print("UNREGISTER")
 
     def cmd_unregister_subconsumer(self, params):
         queue = params.get("queue", self.cur_queue)
         if not queue:
-            print 'No queue specified'
+            print('No queue specified')
             return
         subconsumer = params["subconsumer"]
         consumer = params['consumer']
@@ -1337,24 +1337,24 @@ class AdminConsole:
         q = "select * from pgq_coop.unregister_subconsumer(%s, %s, %s, %s)"
         for subconsumer in subconsumers:
             curs.execute(q, [queue, consumer, subconsumer, batch_handling])
-        print "UNREGISTER"
+        print("UNREGISTER")
 
     def cmd_create_queue(self, params):
         curs = self.db.cursor()
         q = "select * from pgq.get_queue_info(%(queue)s)"
         curs.execute(q, params)
         if curs.fetchone():
-            print "Queue already exists"
+            print("Queue already exists")
             return
         q = "select * from pgq.create_queue(%(queue)s)"
         curs.execute(q, params)
-        print "CREATE"
+        print("CREATE")
 
     def cmd_drop_queue(self, params):
         curs = self.db.cursor()
         q = "select * from pgq.drop_queue(%(queue)s)"
         curs.execute(q, params)
-        print "DROP"
+        print("DROP")
 
     def cmd_alter_queue(self, params):
         """Alter queue parameters, accepts * for all queues"""
@@ -1382,10 +1382,10 @@ class AdminConsole:
                     "(%%(queue)s, '%s', %%(%s)s)" % (k, k)
 
                 curs.execute(q, params)
-        print "ALTER"
+        print("ALTER")
 
     def cmd_show_help(self, params):
-        print __doc__
+        print(__doc__)
 
     def cmd_exit(self, params):
         sys.exit(0)
@@ -1445,8 +1445,8 @@ class AdminConsole:
         for tbl in params['tables']:
             curs.execute(q, [self.cur_queue, tbl, args])
             res = curs.fetchone()
-            print res[0], res[1]
-        print 'ADD_TABLE'
+            print(res[0], res[1])
+        print('ADD_TABLE')
 
     def cmd_londiste_remove_table(self, params):
         """Remove table."""
@@ -1456,8 +1456,8 @@ class AdminConsole:
         for tbl in params['tables']:
             curs.execute(q, [self.cur_queue, tbl])
             res = curs.fetchone()
-            print res[0], res[1]
-        print 'REMOVE_TABLE'
+            print(res[0], res[1])
+        print('REMOVE_TABLE')
 
     def cmd_londiste_add_seq(self, params):
         """Add seq."""
@@ -1467,8 +1467,8 @@ class AdminConsole:
         for seq in params['seqs']:
             curs.execute(q, [self.cur_queue, seq])
             res = curs.fetchone()
-            print res[0], res[1]
-        print 'ADD_SEQ'
+            print(res[0], res[1])
+        print('ADD_SEQ')
 
     def cmd_londiste_remove_seq(self, params):
         """Remove seq."""
@@ -1478,26 +1478,26 @@ class AdminConsole:
         for seq in params['seqs']:
             curs.execute(q, [self.cur_queue, seq])
             res = curs.fetchone()
-            print res[0], res[1]
-        print 'REMOVE_SEQ:', res[0], res[1]
+            print(res[0], res[1])
+        print('REMOVE_SEQ:', res[0], res[1])
 
     ## generic info
 
     def cmd_show_table(self, params):
-        print '-' * 64
+        print('-' * 64)
         tbl = params['table']
         curs = self.db.cursor()
         s = skytools.TableStruct(curs, tbl)
         s.create(fakecurs(), skytools.T_ALL)
-        print '-' * 64
+        print('-' * 64)
 
     def cmd_show_sequence(self, params):
-        print '-' * 64
+        print('-' * 64)
         seq = params['seq']
         curs = self.db.cursor()
         s = skytools.SeqStruct(curs, seq)
         s.create(fakecurs(), skytools.T_ALL)
-        print '-' * 64
+        print('-' * 64)
 
     ## sql pass-through
 
@@ -1510,11 +1510,11 @@ class AdminConsole:
 
         if curs.description:
             display_result(curs, None)
-        print curs.statusmessage
+        print(curs.statusmessage)
 
 class fakecurs:
     def execute(self, sql):
-        print sql
+        print(sql)
 
 def main():
     global script

@@ -5,7 +5,18 @@
 Here is pure Python that should match C code in _cquoting.
 """
 
-import urllib, re
+from __future__ import division, absolute_import, print_function
+
+import re
+
+try:
+    from urllib.parse import quote_plus, unquote_plus  # noqa
+    def _bytes_val(c):
+        return c
+except ImportError:
+    from urllib import quote_plus, unquote_plus  # noqa
+    _bytes_val = chr
+
 
 __all__ = [
     "quote_literal", "quote_copy", "quote_bytea_raw",
@@ -13,12 +24,12 @@ __all__ = [
     "unquote_literal",
 ]
 
-# 
+#
 # SQL quoting
 #
 
 def quote_literal(s):
-    """Quote a literal value for SQL.
+    r"""Quote a literal value for SQL.
 
     If string contains '\\', extended E'' quoting is used,
     otherwise standard quoting.  Input value of None results
@@ -27,7 +38,7 @@ def quote_literal(s):
     Python implementation.
     """
 
-    if s == None:
+    if s is None:
         return "null"
     s = str(s).replace("'", "''")
     s2 = s.replace("\\", "\\\\")
@@ -37,11 +48,11 @@ def quote_literal(s):
 
 def quote_copy(s):
     """Quoting for copy command.  None is converted to \\N.
-    
+
     Python implementation.
     """
 
-    if s == None:
+    if s is None:
         return "\\N"
     s = str(s)
     s = s.replace("\\", "\\\\")
@@ -53,29 +64,31 @@ def quote_copy(s):
 _bytea_map = None
 def quote_bytea_raw(s):
     """Quoting for bytea parser.  Returns None as None.
-    
+
     Python implementation.
     """
     global _bytea_map
-    if s == None:
+    if s is None:
         return None
+    if not isinstance(s, bytes):
+        raise TypeError("Expect bytes")
     if 1 and _bytea_map is None:
         _bytea_map = {}
-        for i in xrange(256):
-            c = chr(i)
+        for i in range(256):
+            c = _bytes_val(i)
             if i < 0x20 or i >= 0x7F:
                 _bytea_map[c] = "\\%03o" % i
-            elif c == "\\":
-                _bytea_map[c] = r"\\"
+            elif i == ord("\\"):
+                _bytea_map[c] = "\\\\"
             else:
-                _bytea_map[c] = c
-    return "".join([_bytea_map[c] for c in s])
+                _bytea_map[c] = '%c' % i
+    return "".join([_bytea_map[b] for b in s])
 
 #
 # Database specific urlencode and urldecode.
 #
 
-def db_urlencode(dict):
+def db_urlencode(dict_val):
     """Database specific urlencode.
 
     Encode None as key without '='.  That means that in "foo&bar=",
@@ -85,11 +98,11 @@ def db_urlencode(dict):
     """
 
     elem_list = []
-    for k, v in dict.items():
+    for k, v in dict_val.items():
         if v is None:
-            elem = urllib.quote_plus(str(k))
+            elem = quote_plus(str(k))
         else:
-            elem = urllib.quote_plus(str(k)) + '=' + urllib.quote_plus(str(v))
+            elem = quote_plus(str(k)) + '=' + quote_plus(str(v))
         elem_list.append(elem)
     return '&'.join(elem_list)
 
@@ -107,15 +120,11 @@ def db_urldecode(qs):
         if not elem:
             continue
         pair = elem.split('=', 1)
-        name = urllib.unquote_plus(pair[0])
-
-        # keep only one instance around
-        name = intern(str(name))
-
+        name = unquote_plus(pair[0])
         if len(pair) == 1:
             res[name] = None
         else:
-            res[name] = urllib.unquote_plus(pair[1])
+            res[name] = unquote_plus(pair[1])
     return res
 
 #
@@ -166,7 +175,7 @@ def _sub_unescape_sqlext(m):
             return v
     return chr(int(v, 8))
 
-def unquote_literal(val, stdstr = False):
+def unquote_literal(val, stdstr=False):
     """Unquotes SQL string.
 
     E'..' -> extended quoting.
@@ -189,7 +198,7 @@ def unquote_literal(val, stdstr = False):
             t2 = val[p2:]
             if t1 == t2:
                 return val[len(t1):-len(t1)]
-        raise Exception("Bad dollar-quoted string")
+        raise ValueError("Bad dollar-quoted string")
     elif val.lower() == "null":
         return None
     return val

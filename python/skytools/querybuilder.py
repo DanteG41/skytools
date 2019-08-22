@@ -12,30 +12,30 @@ See L{plpy_exec} for examples.
 
 """
 
+from __future__ import division, absolute_import, print_function
+
 import skytools
 
-__all__ = [ 
-    'QueryBuilder', 'PLPyQueryBuilder', 'PLPyQuery', 'plpy_exec',
-    "run_query", "run_query_row", "run_lookup", "run_exists",
-]
-
-# make plpy available
 try:
     import plpy
 except ImportError:
-    pass
+    plpy = None
 
+__all__ = [
+    'QueryBuilder', 'PLPyQueryBuilder', 'PLPyQuery', 'plpy_exec',
+    "run_query", "run_query_row", "run_lookup", "run_exists",
+]
 
 PARAM_INLINE = 0 # quote_literal()
 PARAM_DBAPI = 1  # %()s
 PARAM_PLPY = 2   # $n
 
 
-class QArgConf:
+class QArgConf(object):
     """Per-query arg-type config object."""
     param_type = None
 
-class QArg:
+class QArg(object):
     """Place-holder for a query parameter."""
     def __init__(self, name, value, pos, conf):
         self.name = name
@@ -55,8 +55,9 @@ class QArg:
 
 # need an structure with fast remove-from-middle
 # and append operations.
-class DList:
+class DList(object):
     """Simple double-linked list."""
+    __slots__ = ('next', 'prev')
     def __init__(self):
         self.next = self
         self.prev = self
@@ -73,7 +74,7 @@ class DList:
         obj.next = obj.prev = None
 
     def empty(self):
-        return self.next == self
+        return self.next is self
 
     def pop(self):
         """Remove and return first element."""
@@ -84,17 +85,19 @@ class DList:
         return obj
 
 
-class CachedPlan:
+class CachedPlan(DList):
     """Wrapper around prepared plan."""
+    __slots__ = ('key', 'plan')
     def __init__(self, key, plan):
+        super(CachedPlan, self).__init__()
         self.key = key # (sql, (types))
         self.plan = plan
 
 
-class PlanCache:
+class PlanCache(object):
     """Cache for limited amount of plans."""
 
-    def __init__(self, maxplans = 100):
+    def __init__(self, maxplans=100):
         self.maxplans = maxplans
         self.plan_map = {}
         self.plan_list = DList()
@@ -120,24 +123,25 @@ class PlanCache:
 
         # remove plans if too much
         while len(self.plan_map) > self.maxplans:
-            pc = self.plan_list.pop()
-            del self.plan_map[pc.key]
+            # this is ugly workaround for pylint
+            drop = self.plan_list.pop()
+            del self.plan_map[getattr(drop, 'key')]
 
         return plan
 
 
-class QueryBuilder:
+class QueryBuilderCore(object):
     """Helper for query building.
 
     >>> args = {'success': 't', 'total': 45, 'ccy': 'EEK', 'id': 556}
     >>> q = QueryBuilder("update orders set total = {total} where id = {id}", args)
     >>> q.add(" and optional = {non_exist}")
     >>> q.add(" and final = {success}")
-    >>> print q.get_sql(PARAM_INLINE)
+    >>> print(q.get_sql(PARAM_INLINE))
     update orders set total = '45' where id = '556' and final = 't'
-    >>> print q.get_sql(PARAM_DBAPI)
+    >>> print(q.get_sql(PARAM_DBAPI))
     update orders set total = %s where id = %s and final = %s
-    >>> print q.get_sql(PARAM_PLPY)
+    >>> print(q.get_sql(PARAM_PLPY))
     update orders set total = $1 where id = $2 and final = $3
     """
 
@@ -155,14 +159,14 @@ class QueryBuilder:
         self._nargs = 0
 
         if sqlexpr:
-            self.add(sqlexpr, required = True)
+            self.add(sqlexpr, required=True)
 
-    def add(self, expr, type = "text", required = False):
+    def add(self, expr, sql_type="text", required=False):
         """Add SQL fragment to query.
         """
-        self._add_expr('', expr, self._params, type, required)
+        self._add_expr('', expr, self._params, sql_type, required)
 
-    def get_sql(self, param_type = PARAM_INLINE):
+    def get_sql(self, param_type=PARAM_INLINE):
         """Return generated SQL (thus far) as string.
 
         Possible values for param_type:
@@ -171,10 +175,10 @@ class QueryBuilder:
             - 2: Insert $n in place of parameters.
         """
         self._arg_conf.param_type = param_type
-        tmp = map(str, self._sql_parts)
+        tmp = [str(part) for part in self._sql_parts]
         return "".join(tmp)
 
-    def _add_expr(self, pfx, expr, params, type, required):
+    def _add_expr(self, pfx, expr, params, sql_type, required):
         parts = []
         types = []
         values = []
@@ -208,7 +212,7 @@ class QueryBuilder:
                 ktype = k[tpos+1 : ]
             else:
                 kparam = k
-                ktype = type
+                ktype = sql_type
 
             # params==None means params are checked later
             if params is not None and kparam not in params:
@@ -236,6 +240,7 @@ class QueryBuilder:
             self._arg_value_list.extend(values)
         self._nargs = nargs
 
+class QueryBuilder(QueryBuilderCore):
     def execute(self, curs):
         """Client-side query execution on DB-API 2.0 cursor.
 
@@ -249,9 +254,9 @@ class QueryBuilder:
         args = self._params
         return curs.execute(q, args)
 
-class PLPyQueryBuilder(QueryBuilder):
+class PLPyQueryBuilder(QueryBuilderCore):
 
-    def __init__(self, sqlexpr, params, plan_cache = None, sqls = None):
+    def __init__(self, sqlexpr, params, plan_cache=None, sqls=None):
         """Init the object.
 
         @param sqlexpr:     Partial sql fragment.
@@ -261,7 +266,7 @@ class PLPyQueryBuilder(QueryBuilder):
                             to query.  Usually either C{GD} or C{SD} should be given here.
         @param sqls:        list object where to append executed sqls (used for debugging)
         """
-        QueryBuilder.__init__(self, sqlexpr, params)
+        super(PLPyQueryBuilder, self).__init__(sqlexpr, params)
         self._sqls = sqls
 
         if plan_cache is not None:
@@ -284,7 +289,7 @@ class PLPyQueryBuilder(QueryBuilder):
         types = self._arg_type_list
 
         if self._sqls is not None:
-            self._sqls.append( { "sql": self.get_sql(PARAM_INLINE) } )
+            self._sqls.append({"sql": self.get_sql(PARAM_INLINE)})
 
         if self._plan_cache is not None:
             sql = self.get_sql(PARAM_PLPY)
@@ -298,20 +303,20 @@ class PLPyQueryBuilder(QueryBuilder):
         return res
 
 
-class PLPyQuery:
+class PLPyQuery(object):
     """Static, cached PL/Python query that uses QueryBuilder formatting.
-    
+
     See L{plpy_exec} for simple usage.
     """
     def __init__(self, sql):
         qb = QueryBuilder(sql, None)
         p_sql = qb.get_sql(PARAM_PLPY)
-        p_types =  qb._arg_type_list
+        p_types = qb._arg_type_list
         self.plan = plpy.prepare(p_sql, p_types)
         self.arg_map = qb._arg_value_list
         self.sql = sql
 
-    def execute(self, arg_dict, all_keys_required = True):
+    def execute(self, arg_dict, all_keys_required=True):
         try:
             if all_keys_required:
                 arg_list = [arg_dict[k] for k in self.arg_map]
@@ -328,7 +333,7 @@ class PLPyQuery:
     def __repr__(self):
         return 'PLPyQuery<%s>' % self.sql
 
-def plpy_exec(gd, sql, args, all_keys_required = True):
+def plpy_exec(gd, sql, args, all_keys_required=True):
     """Cached plan execution for PL/Python.
 
     @param gd:  dict to store cached plans under.  If None, caching is disabled.
@@ -340,7 +345,7 @@ def plpy_exec(gd, sql, args, all_keys_required = True):
     DBG: plpy.prepare('select $1, $2, $3', ['text', 'int4', 'text'])
     DBG: plpy.execute(('PLAN', 'select $1, $2, $3', ['text', 'int4', 'text']), ['1', '2', '1'])
     >>> res = plpy_exec(None, "select {arg1}, {arg2:int4}, {arg1}", {'arg1': '1', 'arg2': '2'})
-    DBG: plpy.execute("select '1', '2', '1'", [])
+    DBG: plpy.execute("select '1', '2', '1'", ())
     >>> res = plpy_exec(GD, "select {arg1}, {arg2:int4}, {arg1}", {'arg1': '3', 'arg2': '4'})
     DBG: plpy.execute(('PLAN', 'select $1, $2, $3', ['text', 'int4', 'text']), ['3', '4', '3'])
     >>> res = plpy_exec(GD, "select {arg1}, {arg2:int4}, {arg1}", {'arg1': '3'})
@@ -363,7 +368,7 @@ def plpy_exec(gd, sql, args, all_keys_required = True):
 
 # some helper functions for convenient sql execution
 
-def run_query(cur, sql, params = None, **kwargs):
+def run_query(cur, sql, params=None, **kwargs):
     """ Helper function if everything you need is just paramertisized execute
         Sets rows_found that is coneninet to use when you don't need result just
         want to know how many rows were affected
@@ -377,7 +382,7 @@ def run_query(cur, sql, params = None, **kwargs):
         rows = [skytools.dbdict(r) for r in rows]
     return rows
 
-def run_query_row(cur, sql, params = None, **kwargs):
+def run_query_row(cur, sql, params=None, **kwargs):
     """ Helper function if everything you need is just paramertisized execute to
         fetch one row only. If not found none is returned
     """
@@ -387,7 +392,7 @@ def run_query_row(cur, sql, params = None, **kwargs):
         return None
     return rows[0]
 
-def run_lookup(cur, sql, params = None, **kwargs):
+def run_lookup(cur, sql, params=None, **kwargs):
     """ Helper function to fetch one value Takes away all the hassle of preparing statements
         and processing returned result giving out just one value.
     """
@@ -399,30 +404,27 @@ def run_lookup(cur, sql, params = None, **kwargs):
         return None
     return row[0]
 
-def run_exists(cur, sql, params = None, **kwargs):
+def run_exists(cur, sql, params=None, **kwargs):
     """ Helper function to fetch one value Takes away all the hassle of preparing statements
         and processing returned result giving out just one value.
     """
     params = params or kwargs
     val = run_lookup(cur, sql, params)
-    return not (val is None)
+    return val is not None
 
 
 # fake plpy for testing
-class fake_plpy:
+class fake_plpy(object):
     def prepare(self, sql, types):
-        print "DBG: plpy.prepare(%s, %s)" % (repr(sql), repr(types))
+        print("DBG: plpy.prepare(%s, %s)" % (repr(sql), repr(types)))
         return ('PLAN', sql, types)
-    def execute(self, plan, args = []):
-        print "DBG: plpy.execute(%s, %s)" % (repr(plan), repr(args))
+    def execute(self, plan, args=()):
+        print("DBG: plpy.execute(%s, %s)" % (repr(plan), repr(args)))
     def error(self, msg):
-        print "DBG: plpy.error(%s)" % repr(msg)
+        print("DBG: plpy.error(%s)" % repr(msg))
 
-# launch doctest
-if __name__ == '__main__':
-    import doctest
+# make plpy available
+if not plpy:
     plpy = fake_plpy()
     GD = {}
-    doctest.testmod()
-
 

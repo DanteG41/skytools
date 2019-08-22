@@ -287,7 +287,7 @@ class BaseBulkCollectingLoader(BaseLoader):
         """Collects list of rows into operation hashed dict
         """
         op_map = {'I': [], 'U': [], 'D': []}
-        for op, row in self.pkey_ev_map.itervalues():
+        for op, row in self.pkey_ev_map.values():
             # ignore None op events
             if op in op_map:
                 op_map[op].append(row)

@@ -3,6 +3,8 @@
 Compares numeric parts numerically.
 """
 
+from __future__ import division, absolute_import, print_function
+
 # Based on idea at http://code.activestate.com/recipes/285264/
 # Works with both Python 2.x and 3.x
 # Ignores leading zeroes: 001 and 01 are considered equal
@@ -15,11 +17,11 @@ __all__ = ['natsort_key', 'natsort', 'natsorted',
 
 def natsort_key(s):
     """Split string to numeric and non-numeric fragments."""
-    return [ not f[0].isdigit() and f or int(f, 10) for f in _rc.findall(s) ]
+    return [not f[0].isdigit() and f or int(f, 10) for f in _rc.findall(s)]
 
 def natsort(lst):
     """Natural in-place sort, case-sensitive."""
-    lst.sort(key = natsort_key)
+    lst.sort(key=natsort_key)
 
 def natsorted(lst):
     """Return copy of list, sorted in natural order, case-sensitive.
@@ -39,21 +41,15 @@ def natsort_key_icase(s):
 
 def natsort_icase(lst):
     """Natural in-place sort, case-sensitive."""
-    lst.sort(key = natsort_key_icase)
+    lst.sort(key=natsort_key_icase)
 
 def natsorted_icase(lst):
     """Return copy of list, sorted in natural order, case-sensitive.
-    
+
     >>> natsorted_icase(['Ver-1.1', 'vEr-1.11', '', 'veR-1.0'])
     ['', 'veR-1.0', 'Ver-1.1', 'vEr-1.11']
     """
     lst = lst[:]
     natsort_icase(lst)
     return lst
-
-
-# run doctest
-if __name__ == '__main__':
-    import doctest
-    doctest.testmod()
 

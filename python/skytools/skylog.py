@@ -1,21 +1,23 @@
 """Our log handlers for Python's logging package.
 """
 
-import logging
-import logging.handlers
+from __future__ import division, absolute_import, print_function
+
 import os
 import socket
 import time
 
-import skytools
+import logging
+import logging.handlers
+from logging import LoggerAdapter
 
-# use fast implementation if available, otherwise fall back to reference one
+import skytools
+import skytools.tnetstrings
+
 try:
-    import tnetstring as tnetstrings
-    tnetstrings.parse = tnetstrings.pop
-except ImportError:
-    import skytools.tnetstrings as tnetstrings
-    tnetstrings.dumps = tnetstrings.dump
+    unicode
+except NameError:
+    unicode = str   # noqa
 
 __all__ = ['getLogger']
 
@@ -67,7 +69,7 @@ def set_service_name(service_name, job_name):
 _OldLogRecord = logging.LogRecord
 class _NewLogRecord(_OldLogRecord):
     def __init__(self, *args):
-        _OldLogRecord.__init__(self, *args)
+        super(_NewLogRecord, self).__init__(*args)
         self.__dict__.update(_log_extra)
 logging.LogRecord = _NewLogRecord
 
@@ -75,10 +77,10 @@ logging.LogRecord = _NewLogRecord
 # configurable file logger
 class EasyRotatingFileHandler(logging.handlers.RotatingFileHandler):
     """Easier setup for RotatingFileHandler."""
-    def __init__(self, filename, maxBytes = 10*1024*1024, backupCount = 3):
+    def __init__(self, filename, maxBytes=10*1024*1024, backupCount=3):
         """Args same as for RotatingFileHandler, but in filename '~' is expanded."""
         fn = os.path.expanduser(filename)
-        logging.handlers.RotatingFileHandler.__init__(self, fn, maxBytes=maxBytes, backupCount=backupCount)
+        super(EasyRotatingFileHandler, self).__init__(fn, maxBytes=maxBytes, backupCount=backupCount)
 
 
 # send JSON message over UDP
@@ -125,6 +127,8 @@ class UdpLogServerHandler(logging.handlers.DatagramHandler):
     def send(self, s):
         """Disable socket caching."""
         sock = self.makeSocket()
+        if not isinstance(s, bytes):
+            s = s.encode('utf8')
         sock.sendto(s, (self.host, self.port))
         sock.close()
 
@@ -147,7 +151,7 @@ class UdpTNetStringsHandler(logging.handlers.DatagramHandler):
         self.format(record) # render 'message' attribute and others
         for k in self.send_fields:
             msg[k] = record.__dict__[k]
-        tnetstr = tnetstrings.dumps(msg)
+        tnetstr = skytools.tnetstrings.dumps(msg)
         return tnetstr
 
     def send(self, s):
@@ -186,7 +190,7 @@ class LogDBHandler(logging.handlers.SocketHandler):
         Initializes the handler with a specific connection string.
         """
 
-        logging.handlers.SocketHandler.__init__(self, None, None)
+        super(LogDBHandler, self).__init__(None, None)
         self.closeOnError = 1
 
         self.connect_string = connect_string
@@ -198,11 +202,11 @@ class LogDBHandler(logging.handlers.SocketHandler):
 
     def createSocket(self):
         try:
-            logging.handlers.SocketHandler.createSocket(self)
+            super(LogDBHandler, self).createSocket()
         except:
             self.sock = self.makeSocket()
 
-    def makeSocket(self):
+    def makeSocket(self, timeout=1):
         """Create server connection.
         In this case its not socket but database connection."""
 
@@ -271,7 +275,7 @@ class LogDBHandler(logging.handlers.SocketHandler):
         self.stat_cache = {}
         self.last_stat_flush = time.time()
 
-    def send_to_logdb(self, service, type, msg):
+    def send_to_logdb(self, service, level, msg):
         """Actual sending is done here."""
 
         if self.sock is None:
@@ -280,7 +284,7 @@ class LogDBHandler(logging.handlers.SocketHandler):
         if self.sock:
             logcur = self.sock.cursor()
             query = "select * from log.add(%s, %s, %s)"
-            logcur.execute(query, [type, service, msg])
+            logcur.execute(query, [level, service, msg])
 
 
 # fix unicode bug in SysLogHandler
@@ -294,10 +298,9 @@ class SysLogHandler(logging.handlers.SysLogHandler):
 
     def _custom_format(self, record):
         msg = self.format(record) + '\000'
-        """
-        We need to convert record level to lowercase, maybe this will
-        change in the future.
-        """
+
+        # We need to convert record level to lowercase, maybe this will
+        # change in the future.
         prio = '<%d>' % self.encodePriority(self.facility,
                                             self.mapPriority(record.levelname))
         msg = prio + msg
@@ -312,7 +315,7 @@ class SysLogHandler(logging.handlers.SysLogHandler):
         """
         msg = self._custom_format(record)
         # Message is a string. Convert to bytes as required by RFC 5424
-        if type(msg) is unicode:
+        if isinstance(msg, unicode):
             msg = msg.encode('utf-8')
             ## this puts BOM in wrong place
             #if codecs:
@@ -344,54 +347,20 @@ class SysLogHostnameHandler(SysLogHandler):
     def _custom_format(self, record):
         msg = self.format(record)
         format_string = '<%d> %s %s %s\000'
-        msg = format_string % (self.encodePriority(self.facility,self.mapPriority(record.levelname)),
-                               _hostname,
-                               _service_name,
-                               msg)
+        msg = format_string % (self.encodePriority(self.facility, self.mapPriority(record.levelname)),
+                               _hostname, _service_name, msg)
         return msg
 
 
-try:
-    from logging import LoggerAdapter
-except ImportError:
-    # LoggerAdapter is missing from python 2.5
-    class LoggerAdapter(object):
-        def __init__(self, logger, extra):
-            self.logger = logger
-            self.extra = extra
-        def process(self, msg, kwargs):
-            kwargs["extra"] = self.extra
-            return msg, kwargs
-        def debug(self, msg, *args, **kwargs):
-            msg, kwargs = self.process(msg, kwargs)
-            self.logger.debug(msg, *args, **kwargs)
-        def info(self, msg, *args, **kwargs):
-            msg, kwargs = self.process(msg, kwargs)
-            self.logger.info(msg, *args, **kwargs)
-        def warning(self, msg, *args, **kwargs):
-            msg, kwargs = self.process(msg, kwargs)
-            self.logger.warning(msg, *args, **kwargs)
-        def error(self, msg, *args, **kwargs):
-            msg, kwargs = self.process(msg, kwargs)
-            self.logger.error(msg, *args, **kwargs)
-        def exception(self, msg, *args, **kwargs):
-            msg, kwargs = self.process(msg, kwargs)
-            kwargs["exc_info"] = 1
-            self.logger.error(msg, *args, **kwargs)
-        def critical(self, msg, *args, **kwargs):
-            msg, kwargs = self.process(msg, kwargs)
-            self.logger.critical(msg, *args, **kwargs)
-        def log(self, level, msg, *args, **kwargs):
-            msg, kwargs = self.process(msg, kwargs)
-            self.logger.log(level, msg, *args, **kwargs)
-
 # add missing aliases (that are in Logger class)
-LoggerAdapter.fatal = LoggerAdapter.critical
-LoggerAdapter.warn = LoggerAdapter.warning
+if not hasattr(LoggerAdapter, 'fatal'):
+    LoggerAdapter.fatal = LoggerAdapter.critical
+if not hasattr(LoggerAdapter, 'warn'):
+    LoggerAdapter.warn = LoggerAdapter.warning
 
 class SkyLogger(LoggerAdapter):
     def __init__(self, logger, extra):
-        LoggerAdapter.__init__(self, logger, extra)
+        super(SkyLogger, self).__init__(logger, extra)
         self.name = logger.name
     def trace(self, msg, *args, **kwargs):
         """Log 'msg % args' with severity 'TRACE'."""

@@ -1,11 +1,55 @@
 
 """Nicer config class."""
 
-import os, os.path, ConfigParser, socket
+from __future__ import division, absolute_import, print_function
+
+import os
+import os.path
+import re
+import socket
 
 import skytools
 
-__all__ = ['Config']
+try:
+    from configparser import (      # noqa
+        NoOptionError, NoSectionError, InterpolationError, InterpolationDepthError,
+        Error as ConfigError, ConfigParser, MAX_INTERPOLATION_DEPTH,
+        ExtendedInterpolation, Interpolation)
+except ImportError:
+    from ConfigParser import (      # noqa
+        NoOptionError, NoSectionError, InterpolationError, InterpolationDepthError,
+        Error as ConfigError, SafeConfigParser, MAX_INTERPOLATION_DEPTH)
+
+    class Interpolation(object):
+        """Define Interpolation API from Python3."""
+
+        def before_get(self, parser, section, option, value, defaults):
+            return value
+
+        def before_set(self, parser, section, option, value):
+            return value
+
+        def before_read(self, parser, section, option, value):
+            return value
+
+        def before_write(self, parser, section, option, value):
+            return value
+
+    class ConfigParser(SafeConfigParser):
+        """Default Python's ConfigParser that uses _DEFAULT_INTERPOLATION"""
+        _DEFAULT_INTERPOLATION = None
+
+        def _interpolate(self, section, option, rawval, defs):
+            if self._DEFAULT_INTERPOLATION is None:
+                return SafeConfigParser._interpolate(self, section, option, rawval, defs)
+            return self._DEFAULT_INTERPOLATION.before_get(self, section, option, rawval, defs)
+
+
+__all__ = [
+    'Config',
+    'NoOptionError', 'ConfigError',
+    'ConfigParser', 'ExtendedConfigParser', 'ExtendedCompatConfigParser'
+]
 
 class Config(object):
     """Bit improved ConfigParser.
@@ -15,10 +59,9 @@ class Config(object):
      - Accepts defaults in get() functions.
      - List value support.
     """
-    def __init__(self, main_section, filename, sane_config = 1, user_defs = {}, override = {}, ignore_defs = False):
+    def __init__(self, main_section, filename, sane_config=None,
+                 user_defs=None, override=None, ignore_defs=False):
         """Initialize Config and read from file.
-
-        @param sane_config:  chooses between ConfigParser/SafeConfigParser.
         """
         # use config file name as default job_name
         if filename:
@@ -38,21 +81,18 @@ class Config(object):
             if filename:
                 self.defs['config_dir'] = os.path.dirname(filename)
                 self.defs['config_file'] = filename
-            self.defs.update(user_defs)
+            if user_defs:
+                self.defs.update(user_defs)
 
         self.main_section = main_section
         self.filename = filename
-        self.sane_config = sane_config
-        self.override = override
-        if sane_config:
-            self.cf = ConfigParser.SafeConfigParser()
-        else:
-            self.cf = ConfigParser.ConfigParser()
+        self.override = override or {}
+        self.cf = ConfigParser()
 
         if filename is None:
             self.cf.add_section(main_section)
         elif not os.path.isfile(filename):
-            raise Exception('Config file not found: '+filename)
+            raise ConfigError('Config file not found: '+filename)
 
         self.reload()
 
@@ -61,7 +101,7 @@ class Config(object):
         if self.filename:
             self.cf.read(self.filename)
         if not self.cf.has_section(self.main_section):
-            raise Exception("Wrong config file, no section '%s'" % self.main_section)
+            raise NoSectionError(self.main_section)
 
         # apply default if key not set
         for k, v in self.defs.items():
@@ -75,54 +115,59 @@ class Config(object):
 
     def get(self, key, default=None):
         """Reads string value, if not set then default."""
-        try:
-            return self.cf.get(self.main_section, key)
-        except ConfigParser.NoOptionError:
-            if default == None:
-                raise Exception("Config value not set: " + key)
+
+        if not self.cf.has_option(self.main_section, key):
+            if default is None:
+                raise NoOptionError(key, self.main_section)
             return default
+
+        return str(self.cf.get(self.main_section, key))
 
     def getint(self, key, default=None):
         """Reads int value, if not set then default."""
-        try:
-            return self.cf.getint(self.main_section, key)
-        except ConfigParser.NoOptionError:
-            if default == None:
-                raise Exception("Config value not set: " + key)
+
+        if not self.cf.has_option(self.main_section, key):
+            if default is None:
+                raise NoOptionError(key, self.main_section)
             return default
+
+        return self.cf.getint(self.main_section, key)
 
     def getboolean(self, key, default=None):
         """Reads boolean value, if not set then default."""
-        try:
-            return self.cf.getboolean(self.main_section, key)
-        except ConfigParser.NoOptionError:
-            if default == None:
-                raise Exception("Config value not set: " + key)
+
+        if not self.cf.has_option(self.main_section, key):
+            if default is None:
+                raise NoOptionError(key, self.main_section)
             return default
+
+        return self.cf.getboolean(self.main_section, key)
 
     def getfloat(self, key, default=None):
         """Reads float value, if not set then default."""
-        try:
-            return self.cf.getfloat(self.main_section, key)
-        except ConfigParser.NoOptionError:
-            if default == None:
-                raise Exception("Config value not set: " + key)
+
+        if not self.cf.has_option(self.main_section, key):
+            if default is None:
+                raise NoOptionError(key, self.main_section)
             return default
+
+        return self.cf.getfloat(self.main_section, key)
 
     def getlist(self, key, default=None):
         """Reads comma-separated list from key."""
-        try:
-            s = self.cf.get(self.main_section, key).strip()
-            res = []
-            if not s:
-                return res
-            for v in s.split(","):
-                res.append(v.strip())
-            return res
-        except ConfigParser.NoOptionError:
-            if default == None:
-                raise Exception("Config value not set: " + key)
+
+        if not self.cf.has_option(self.main_section, key):
+            if default is None:
+                raise NoOptionError(key, self.main_section)
             return default
+
+        s = self.get(key).strip()
+        res = []
+        if not s:
+            return res
+        for v in s.split(","):
+            res.append(v.strip())
+        return res
 
     def getdict(self, key, default=None):
         """Reads key-value dict from parameter.
@@ -130,25 +175,26 @@ class Config(object):
         Key and value are separated with ':'.  If missing,
         key itself is taken as value.
         """
-        try:
-            s = self.cf.get(self.main_section, key).strip()
-            res = {}
-            if not s:
-                return res
-            for kv in s.split(","):
-                tmp = kv.split(':', 1)
-                if len(tmp) > 1:
-                    k = tmp[0].strip()
-                    v = tmp[1].strip()
-                else:
-                    k = kv.strip()
-                    v = k
-                res[k] = v
-            return res
-        except ConfigParser.NoOptionError:
-            if default == None:
-                raise Exception("Config value not set: " + key)
+
+        if not self.cf.has_option(self.main_section, key):
+            if default is None:
+                raise NoOptionError(key, self.main_section)
             return default
+
+        s = self.get(key).strip()
+        res = {}
+        if not s:
+            return res
+        for kv in s.split(","):
+            tmp = kv.split(':', 1)
+            if len(tmp) > 1:
+                k = tmp[0].strip()
+                v = tmp[1].strip()
+            else:
+                k = kv.strip()
+                v = k
+            res[k] = v
+        return res
 
     def getfile(self, key, default=None):
         """Reads filename from config.
@@ -171,15 +217,17 @@ class Config(object):
 
         Examples: 1, 2 B, 3K, 4 MB
         """
-        try:
-            s = self.cf.get(self.main_section, key)
-        except ConfigParser.NoOptionError:
+
+        if not self.cf.has_option(self.main_section, key):
             if default is None:
-                raise Exception("Config value not set: " + key)
+                raise NoOptionError(key, self.main_section)
             s = default
+        else:
+            s = self.cf.get(self.main_section, key)
+
         return skytools.hsize_to_bytes(s)
 
-    def get_wildcard(self, key, values=[], default=None):
+    def get_wildcard(self, key, values=(), default=None):
         """Reads a wildcard property from conf and returns its string value, if not set then default."""
 
         orig_key = key
@@ -190,14 +238,12 @@ class Config(object):
             keys.append(key)
         keys.reverse()
 
-        for key in keys:
-            try:
-                return self.cf.get(self.main_section, key)
-            except ConfigParser.NoOptionError:
-                pass
+        for k in keys:
+            if self.cf.has_option(self.main_section, k):
+                return self.cf.get(self.main_section, k)
 
-        if default == None:
-            raise Exception("Config value not set: " + orig_key)
+        if default is None:
+            raise NoOptionError(orig_key, self.main_section)
         return default
 
     def sections(self):
@@ -210,7 +256,7 @@ class Config(object):
 
     def clone(self, main_section):
         """Return new Config() instance with new main section on same config file."""
-        return Config(main_section, self.filename, self.sane_config)
+        return Config(main_section, self.filename)
 
     def options(self):
         """Return list of options in main section."""
@@ -226,3 +272,94 @@ class Config(object):
 
     # define some aliases (short-cuts / backward compatibility cruft)
     getbool = getboolean
+
+
+
+class ExtendedInterpolationCompat(Interpolation):
+    _EXT_VAR_RX = r'\$\$|\$\{[^(){}]+\}'
+    _OLD_VAR_RX = r'%%|%\([^(){}]+\)s'
+    _var_rc = re.compile('(%s|%s)' % (_EXT_VAR_RX, _OLD_VAR_RX))
+    _bad_rc = re.compile('[%$]')
+
+    def before_get(self, parser, section, option, rawval, defaults):
+        dst = []
+        self._interpolate_ext(dst, parser, section, option, rawval, defaults, set())
+        return ''.join(dst)
+
+    def before_set(self, parser, section, option, value):
+        sub = self._var_rc.sub('', value)
+        if self._bad_rc.search(sub):
+            raise ValueError("invalid interpolation syntax in %r" % value)
+        return value
+
+    def _interpolate_ext(self, dst, parser, section, option, rawval, defaults, loop_detect):
+        if not rawval:
+            return rawval
+
+        if len(loop_detect) > MAX_INTERPOLATION_DEPTH:
+            raise InterpolationDepthError(option, section, rawval)
+
+        xloop = (section, option)
+        if xloop in loop_detect:
+            raise InterpolationError(section, option, 'Loop detected: %r in %r' % (xloop, loop_detect))
+        loop_detect.add(xloop)
+
+        parts = self._var_rc.split(rawval)
+        for i, frag in enumerate(parts):
+            fullkey = None
+            use_vars = defaults
+            if i % 2 == 0:
+                dst.append(frag)
+                continue
+            if frag in ('$$', '%%'):
+                dst.append(frag[0])
+                continue
+            if frag.startswith('${') and frag.endswith('}'):
+                fullkey = frag[2:-1]
+
+                # use section access only for new-style keys
+                if ':' in fullkey:
+                    ksect, key = fullkey.split(':', 1)
+                    use_vars = None
+                else:
+                    ksect, key = section, fullkey
+            elif frag.startswith('%(') and frag.endswith(')s'):
+                fullkey = frag[2:-2]
+                ksect, key = section, fullkey
+            else:
+                raise InterpolationError(section, option, 'Internal parse error: %r' % frag)
+
+            key = parser.optionxform(key)
+            newpart = parser.get(ksect, key, raw=True, vars=use_vars)
+            if newpart is None:
+                raise InterpolationError(ksect, key, 'Key referenced is None')
+            self._interpolate_ext(dst, parser, ksect, key, newpart, defaults, loop_detect)
+
+        loop_detect.remove(xloop)
+
+
+try:
+    ExtendedInterpolation
+except NameError:
+    class ExtendedInterpolationPy2(ExtendedInterpolationCompat):
+        _var_rc = re.compile('(%s)' % ExtendedInterpolationCompat._EXT_VAR_RX)
+        _bad_rc = re.compile('[$]')
+    ExtendedInterpolation = ExtendedInterpolationPy2
+
+
+class ExtendedConfigParser(ConfigParser):
+    """ConfigParser that uses Python3-style extended interpolation by default.
+
+    Syntax: ${var} and ${section:var}
+    """
+    _DEFAULT_INTERPOLATION = ExtendedInterpolation()
+
+
+class ExtendedCompatConfigParser(ExtendedConfigParser):
+    r"""Support both extended "${}" syntax from python3 and old "%()s" too.
+
+    New ${} syntax allows ${key} to refer key in same section,
+    and ${sect:key} to refer key in other sections.
+    """
+    _DEFAULT_INTERPOLATION = ExtendedInterpolationCompat()
+

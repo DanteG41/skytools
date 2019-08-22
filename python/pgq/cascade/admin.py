@@ -12,7 +12,7 @@ setadm.py INI pause NODE [CONS]
 
 import optparse
 import os.path
-import Queue
+import queue
 import sys
 import threading
 import time
@@ -434,11 +434,11 @@ class CascadeAdmin(skytools.AdminScript):
         self.load_local_info()
 
         # prepare data for workers
-        members = Queue.Queue()
-        for m in self.queue_info.member_map.itervalues():
+        members = queue.Queue()
+        for m in self.queue_info.member_map.values():
             cstr = self.add_connect_string_profile(m.location, 'remote')
             members.put( (m.name, cstr) )
-        nodes = Queue.Queue()
+        nodes = queue.Queue()
 
         # launch workers and wait
         num_nodes = len(self.queue_info.member_map)
@@ -456,7 +456,7 @@ class CascadeAdmin(skytools.AdminScript):
         while True:
             try:
                 node = nodes.get_nowait()
-            except Queue.Empty:
+            except queue.Empty:
                 break
             self.queue_info.add_node(node)
 
@@ -467,7 +467,7 @@ class CascadeAdmin(skytools.AdminScript):
         while True:
             try:
                 node_name, node_connstr = members.get_nowait()
-            except Queue.Empty:
+            except queue.Empty:
                 break
             node = self.load_node_status (node_name, node_connstr)
             nodes.put(node)
@@ -488,8 +488,8 @@ class CascadeAdmin(skytools.AdminScript):
             node = NodeInfo(self.queue_name, curs.fetchone())
             node.load_status(curs)
             self.load_extra_status(curs, node)
-        except DBError, d:
-            msg = str(d).strip().split('\n', 1)[0].strip()
+        except(DBError) as err:
+            msg = str(err).strip().split('\n', 1)[0].strip()
             print('Node %r failure: %s' % (name, msg))
             node = NodeInfo(self.queue_name, None, node_name = name)
         finally:
@@ -511,11 +511,11 @@ class CascadeAdmin(skytools.AdminScript):
         subscriber_nodes = self.get_node_subscriber_list(self.local_node)
 
         offset=4*' '
-        print node.get_title()
-        print offset+'Provider: %s' % node.provider_node
-        print offset+'Subscribers: %s' % ', '.join(subscriber_nodes)
+        print(node.get_title())
+        print(offset+'Provider: %s' % node.provider_node)
+        print(offset+'Subscribers: %s' % ', '.join(subscriber_nodes))
         for l in node.get_infolines():
-            print offset+l
+            print(offset+l)
 
     def load_extra_status(self, curs, node):
         """Fetch extra info."""
@@ -601,8 +601,8 @@ class CascadeAdmin(skytools.AdminScript):
             else:
                 q = "select * from pgq.unregister_consumer(%s, %s)"
                 self.node_cmd(old_provider, q, [self.queue_name, consumer])
-        except skytools.DBError, d:
-            self.log.warning("failed to unregister from old provider (%s): %s", old_provider, str(d))
+        except(skytools.DBError) as err:
+            self.log.warning("failed to unregister from old provider (%s): %s", old_provider, str(err))
 
     def cmd_rename_node(self, old_name, new_name):
         """Rename node."""
@@ -644,7 +644,6 @@ class CascadeAdmin(skytools.AdminScript):
 
         self.load_local_info()
 
-        node = None
         try:
             node = self.load_node_info(node_name)
             if node:
@@ -663,24 +662,24 @@ class CascadeAdmin(skytools.AdminScript):
                 root_db = self.find_root_db()
                 q = "select * from pgq_node.unregister_location(%s, %s)"
                 self.exec_cmd(root_db, q, [self.queue_name, node_name])
-        except skytools.DBError, d:
-            self.log.warning("Unregister from root failed: %s", str(d))
+        except(skytools.DBError) as err:
+            self.log.warning("Unregister from root failed: %s", str(err))
 
         try:
             # drop node info
             db = self.get_node_database(node_name)
             q = "select * from pgq_node.drop_node(%s, %s)"
             self.exec_cmd(db, q, [self.queue_name, node_name])
-        except skytools.DBError, d:
-            self.log.warning("Local drop failure: %s", str(d))
+        except(skytools.DBError) as err:
+            self.log.warning("Local drop failure: %s", str(err))
 
         # brute force removal
         for n in self.queue_info.member_map.values():
             try:
                 q = "select * from pgq_node.drop_node(%s, %s)"
                 self.node_cmd(n.name, q, [self.queue_name, node_name])
-            except skytools.DBError, d:
-                self.log.warning("Failed to remove from '%s': %s", n.name, str(d))
+            except(skytools.DBError) as err:
+                self.log.warning("Failed to remove from '%s': %s", n.name, str(err))
 
     def node_depends(self, sub_node, top_node):
         cur_node = sub_node
@@ -904,8 +903,8 @@ class CascadeAdmin(skytools.AdminScript):
             try:
                 q = "select * from pgq_node.register_location(%s, %s, null, true)"
                 self.node_cmd(node_name, q, [self.queue_name, dead_node_name])
-            except DBError, d:
-                msg = str(d).strip().split('\n', 1)[0]
+            except(DBError) as err:
+                msg = str(err).strip().split('\n', 1)[0]
                 print('Node %s failure: %s' % (node_name, msg))
                 self.close_node_database(node_name)
 

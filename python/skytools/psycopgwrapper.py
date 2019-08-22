@@ -54,18 +54,17 @@ Plain .fetchall() / .fetchone() give exact same result.
 
 """
 
-__all__ = ['connect_database', 'DBError', 'I_AUTOCOMMIT', 'I_READ_COMMITTED',
-           'I_REPEATABLE_READ', 'I_SERIALIZABLE']
+from __future__ import division, absolute_import, print_function
 
-import sys
-import socket
-import psycopg2.extensions
-import psycopg2.extras
 import skytools
-
-from psycopg2 import Error as DBError
 from skytools.sockutil import set_tcp_keepalive
 
+import psycopg2.extensions
+import psycopg2.extras
+from psycopg2 import Error as DBError
+
+__all__ = ['connect_database', 'DBError', 'I_AUTOCOMMIT', 'I_READ_COMMITTED',
+           'I_REPEATABLE_READ', 'I_SERIALIZABLE']
 
 I_AUTOCOMMIT = psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
 I_READ_COMMITTED = psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED
@@ -83,8 +82,8 @@ class _CompatRow(psycopg2.extras.DictRow):
 
     def copy(self):
         """Return regular dict."""
-        return skytools.dbdict(self.iteritems())
-    
+        return skytools.dbdict(self.items())
+
     def iterkeys(self):
         return self._index.iterkeys()
 
@@ -98,7 +97,7 @@ class _CompatRow(psycopg2.extras.DictRow):
 class _CompatCursor(psycopg2.extras.DictCursor):
     """Regular psycopg2 DictCursor with dict* methods."""
     def __init__(self, *args, **kwargs):
-        psycopg2.extras.DictCursor.__init__(self, *args, **kwargs)
+        super(_CompatCursor, self).__init__(*args, **kwargs)
         self.row_factory = _CompatRow
     dictfetchone = psycopg2.extras.DictCursor.fetchone
     dictfetchall = psycopg2.extras.DictCursor.fetchall
@@ -107,21 +106,19 @@ class _CompatCursor(psycopg2.extras.DictCursor):
 class _CompatConnection(psycopg2.extensions.connection):
     """Connection object that uses _CompatCursor."""
     my_name = '?'
-    def cursor(self, name = None):
+    server_version = None
+    def cursor(self, name=None):
         if name:
-            return psycopg2.extensions.connection.cursor(self,
-                    cursor_factory = _CompatCursor,
-                    name = name)
+            return super(_CompatConnection, self).cursor(cursor_factory=_CompatCursor, name=name)
         else:
-            return psycopg2.extensions.connection.cursor(self,
-                    cursor_factory = _CompatCursor)
+            return super(_CompatConnection, self).cursor(cursor_factory=_CompatCursor)
 
-def connect_database(connstr, keepalive = True,
-                     tcp_keepidle = 4 * 60,     # 7200
-                     tcp_keepcnt = 4,           # 9
-                     tcp_keepintvl = 15):       # 75
+def connect_database(connstr, keepalive=True,
+                     tcp_keepidle=4*60,       # 7200
+                     tcp_keepcnt=4,           # 9
+                     tcp_keepintvl=15):       # 75
     """Create a db connection with connect_timeout and TCP keepalive.
-    
+
     Default connect_timeout is 15, to change put it directly into dsn.
 
     The extra tcp_* options are Linux-specific, see `man 7 tcp` for details.
@@ -140,7 +137,7 @@ def connect_database(connstr, keepalive = True,
     set_tcp_keepalive(fd, keepalive, tcp_keepidle, tcp_keepcnt, tcp_keepintvl)
 
     # fill .server_version on older psycopg
-    if not hasattr(db, 'server_version'):
+    if not getattr(db, 'server_version'):
         iso = db.isolation_level
         db.set_isolation_level(0)
         curs.execute('show server_version_num')

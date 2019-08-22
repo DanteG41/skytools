@@ -204,8 +204,8 @@ class LocalConsumer(BaseConsumer):
             else:
                 tick_id = -1
             return tick_id
-        except IOError, ex:
-            if ex.errno == errno.ENOENT:
+        except(IOError) as err:
+            if err.errno == errno.ENOENT:
                 return -1
             raise
 

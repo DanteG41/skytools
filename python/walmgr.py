@@ -285,7 +285,7 @@ class PostgresConfiguration:
     def modify(self, cf_params):
         """Change the configuration parameters supplied in cf_params"""
 
-        for (param, value) in cf_params.iteritems():
+        for (param, value) in cf_params.items():
             r_active = re.compile("^\s*%s\s*=\s*([^\s#]*).*$" % param, re.M)
             r_disabled = re.compile("^\s*#\s*%s\s*=.*$" % param, re.M)
 
@@ -544,8 +544,8 @@ class WalMgr(skytools.DBScript):
         if sgn == 0 or not self.not_really:
             try:
                 os.kill(pid, sgn)
-            except OSError, ex:
-                if ex.errno == errno.ESRCH:
+            except(OSError) as err:
+                if err.errno == errno.ESRCH:
                     self.log.info("postmaster is not running (no process at indicated PID)")
                     return False
                 else:
@@ -959,7 +959,7 @@ class WalMgr(skytools.DBScript):
     def remote_xlock(self):
         """
         Obtain the backup lock to ensure that several backups are not
-        run in parallel. If someone already has the lock we check if
+        run in parralel. If someone already has the lock we check if
         this is from a previous (failed) backup. If that is the case,
         the lock is released and re-obtained.
         """
@@ -1130,8 +1130,8 @@ compression         = %(compression)s
             opt_dict = dict([(k, self.cf.get(k)) for k in self.cf.options()])
             opt_dict['slave'] = self.options.slave
             master_config = master_config % opt_dict
-        except KeyError, e:
-            die(1, 'Required setting missing: %s' % e)
+        except(KeyError) as err:
+            die(1, 'Required setting missing: %s' % err)
 
         self.write_walmgr_config(master_config)
 
@@ -1190,8 +1190,8 @@ primary_conninfo     = %(primary_conninfo)s
         try:
             opt_dict = dict([(k, self.cf.get(k)) for k in self.cf.options()])
             slave_config = slave_config % opt_dict
-        except KeyError, e:
-            die(1, 'Required setting missing: %s' % e)
+        except(KeyError) as err:
+            die(1, 'Required setting missing: %s' % err)
 
         self.write_walmgr_config(slave_config)
 
@@ -1305,8 +1305,8 @@ primary_conninfo     = %(primary_conninfo)s
                             open(check_file,"w").write("1")
                 else:
                     self.log.debug("%d seconds elapsed, not enough to run periodic.", elapsed)
-        except Exception, det:
-            self.log.error("Failed to run periodic command: %s", det)
+        except(Exception) as err:
+            self.log.error("Failed to run periodic command: %s", err)
 
     def master_backup(self):
         """
@@ -1369,8 +1369,8 @@ primary_conninfo     = %(primary_conninfo)s
 
                     try:
                         os.chdir(spc_path)
-                    except Exception, det:
-                        self.log.warning("Broken link: %s", det)
+                    except(Exception) as err:
+                        self.log.warning("Broken link: %s", err)
                         continue
                     cmdline = [ "--delete", "--exclude", ".*", "--copy-unsafe-links", ".", dstfn]
                     self.exec_big_rsync(cmdline)
@@ -1393,8 +1393,8 @@ primary_conninfo     = %(primary_conninfo)s
                 self.exec_big_rsync(cmdline)
 
             self.remote_walmgr("xpurgewals")
-        except Exception, e:
-            self.log.error(e)
+        except(Exception) as err:
+            self.log.error(err)
             errors = True
         finally:
             try:
@@ -1610,7 +1610,7 @@ STOP TIME: %(stop_time)s
 
         try:
             xlog = open(os.path.join(xlog_dir, chunk.filename))
-        except IOError, det:
+        except(IOError) as err:
             self.log.warning("Cannot access file %s", chunk.filename)
             return
 
@@ -1773,9 +1773,9 @@ STOP TIME: %(stop_time)s
             try:
                 self.slave_xrestore_unsafe(srcname, dstpath, ppid)
                 loop = 0
-            except SystemExit, d:
+            except(SystemExit):
                 sys.exit(1)
-            except Exception, d:
+            except(Exception) as err:
                 exc, msg, tb = sys.exc_info()
                 self.log.fatal("xrestore %s crashed: %s: '%s' (%s: %r)",
                         srcname, exc, str(msg).rstrip(),
@@ -2174,11 +2174,11 @@ STOP TIME: %(stop_time)s
                 pid =int(pidstring)
                 try:
                     os.kill(pid, 0)
-                except OSError, e:
-                    if e.errno == errno.EPERM:
+                except(OSError, e) as err:
+                    if err.errno == errno.EPERM:
                         self.log.fatal("Found pg_receivexlog lock file %s, pid %d in use", prxloglock, pid)
                         sys.exit(1)
-                    elif e.errno == errno.ESRCH:
+                    elif err.errno == errno.ESRCH:
                         self.log.info("Ignoring stale pg_receivexlog lock file")
                         if not self.not_really:
                             os.remove(prxloglock)
@@ -2272,8 +2272,8 @@ STOP TIME: %(stop_time)s
             while os.path.isfile(prxloglock) and not self.not_really:
                 time.sleep(5)
 
-        except Exception, e:
-            self.log.error(e)
+        except(Exception) as err:
+            self.log.error(err)
             errors = True
 
         finally:
@@ -2282,8 +2282,8 @@ STOP TIME: %(stop_time)s
                 if not self.not_really:
                     os.kill(p_rxlog.pid, signal.SIGTERM)
                 self.log.info("pg_receivelog stopped")
-            except Exception, det:
-                self.log.warning("Failed to stop pg_receivexlog: %s", det)
+            except(Exception) as err:
+                self.log.warning("Failed to stop pg_receivexlog: %s", err)
 
             # cleanup
             if os.path.isfile(prxloglock):

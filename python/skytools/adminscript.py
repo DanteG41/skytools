@@ -1,10 +1,13 @@
-#! /usr/bin/env python
-
 """Admin scripting.
 """
 
-import sys, inspect
+# allow getargspec
+# pylint:disable=deprecated-method
 
+from __future__ import division, absolute_import, print_function
+
+import sys
+import inspect
 import skytools
 
 __all__ = ['AdminScript']
@@ -19,7 +22,7 @@ class AdminScript(skytools.DBScript):
     commands_without_pidfile = {}
     def __init__(self, service_name, args):
         """AdminScript init."""
-        skytools.DBScript.__init__(self, service_name, args)
+        super(AdminScript, self).__init__(service_name, args)
 
         if len(self.args) < 2:
             self.log.error("need command")
@@ -48,20 +51,20 @@ class AdminScript(skytools.DBScript):
         fn = getattr(self, fname)
 
         # check if correct number of arguments
-        (args, varargs, varkw, defaults) = inspect.getargspec(fn)
+        (args, varargs, ___varkw, ___defaults) = inspect.getargspec(fn)
         n_args = len(args) - 1 # drop 'self'
         if varargs is None and n_args != len(cmdargs):
             helpstr = ""
             if n_args:
                 helpstr = ": " + " ".join(args[1:])
-            self.log.error("command '%s' got %d args, but expects %d%s"
-                    % (cmd, len(cmdargs), n_args, helpstr))
+            self.log.error("command '%s' got %d args, but expects %d%s",
+                           cmd, len(cmdargs), n_args, helpstr)
             sys.exit(1)
 
         # run command
         fn(*cmdargs)
 
-    def fetch_list(self, db, sql, args, keycol = None):
+    def fetch_list(self, db, sql, args, keycol=None):
         """Fetch a resultset from db, optionally turning it into value list."""
         curs = db.cursor()
         curs.execute(sql, args)
@@ -73,17 +76,18 @@ class AdminScript(skytools.DBScript):
             res = [r[keycol] for r in rows]
         return res
 
-    def display_table(self, db, desc, sql, args = [], fields = [],
-                      fieldfmt = {}):
+    def display_table(self, db, desc, sql, args=(), fields=(), fieldfmt=None):
         """Display multirow query as a table."""
 
-        self.log.debug("display_table: %s" % skytools.quote_statement(sql, args))
+        self.log.debug("display_table: %s", skytools.quote_statement(sql, args))
         curs = db.cursor()
         curs.execute(sql, args)
         rows = curs.fetchall()
         db.commit()
         if len(rows) == 0:
             return 0
+        if not fieldfmt:
+            fieldfmt = {}
 
         if not fields:
             fields = [f[0] for f in curs.description]
@@ -100,7 +104,7 @@ class AdminScript(skytools.DBScript):
         if desc:
             print(desc)
         print(fmt % tuple(fields))
-        print(fmt % tuple([ '-' * (w - 2) for w in widths ]))
+        print(fmt % tuple(['-' * (w - 2) for w in widths]))
         #print(fmt % tuple(['-'*15] * len(fields)))
         for row in rows:
             vals = []
@@ -115,14 +119,14 @@ class AdminScript(skytools.DBScript):
 
     def exec_stmt(self, db, sql, args):
         """Run regular non-query SQL on db."""
-        self.log.debug("exec_stmt: %s" % skytools.quote_statement(sql, args))
+        self.log.debug("exec_stmt: %s", skytools.quote_statement(sql, args))
         curs = db.cursor()
         curs.execute(sql, args)
         db.commit()
 
     def exec_query(self, db, sql, args):
         """Run regular query SQL on db."""
-        self.log.debug("exec_query: %s" % skytools.quote_statement(sql, args))
+        self.log.debug("exec_query: %s", skytools.quote_statement(sql, args))
         curs = db.cursor()
         curs.execute(sql, args)
         res = curs.fetchall()

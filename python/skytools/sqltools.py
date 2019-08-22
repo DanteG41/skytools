@@ -1,14 +1,11 @@
 
 """Database tools."""
 
-import os
-from cStringIO import StringIO
-import skytools
+from __future__ import division, absolute_import, print_function
 
-try:
-    import plpy
-except ImportError:
-    pass
+import os
+import io
+import skytools
 
 __all__ = [
     "fq_name_parts", "fq_name", "get_table_oid", "get_table_pkeys",
@@ -21,7 +18,25 @@ __all__ = [
 ]
 
 class dbdict(dict):
-    """Wrapper on actual dict that allows accessing dict keys as attributes."""
+    """Wrapper on actual dict that allows accessing dict keys as attributes.
+
+    >>> row = dbdict(a=1, b=2)
+    >>> row.a, row.b, row['a'], row['b']
+    (1, 2, 1, 2)
+    >>> row.c = 3; row['c']
+    3
+    >>> del row.c; row.c
+    Traceback (most recent call last):
+        ...
+    AttributeError: c
+    >>> row['c']
+    Traceback (most recent call last):
+        ...
+    KeyError: 'c'
+    >>> row.merge({'q': 4}); row.q
+    4
+
+    """
     # obj.foo access
     def __getattr__(self, k):
         "Return attribute."
@@ -58,10 +73,7 @@ def fq_name_parts(tbl):
     tmp = tbl.split('.', 1)
     if len(tmp) == 1:
         return ['public', tbl]
-    elif len(tmp) == 2:
-        return tmp
-    else:
-        raise Exception('Syntax error in table name:'+tbl)
+    return tmp
 
 def fq_name(tbl):
     """Return fully qualified name.
@@ -98,7 +110,7 @@ def get_table_pkeys(curs, tbl):
         "   AND i.indisprimary AND k.attnum > 0 AND NOT k.attisdropped"\
         " ORDER BY k.attnum"
     curs.execute(q, [oid])
-    return map(lambda x: x[0], curs.fetchall())
+    return [row[0] for row in curs.fetchall()]
 
 def get_table_columns(curs, tbl):
     """Return list of column names for table."""
@@ -108,7 +120,7 @@ def get_table_columns(curs, tbl):
         "   AND k.attnum > 0 AND NOT k.attisdropped"\
         " ORDER BY k.attnum"
     curs.execute(q, [oid])
-    return map(lambda x: x[0], curs.fetchall())
+    return [row[0] for row in curs.fetchall()]
 
 #
 # exist checks
@@ -210,15 +222,20 @@ class Snapshot(object):
     True
     >>> sn.contains(20)
     False
+    >>> Snapshot(':')
+    Traceback (most recent call last):
+        ...
+    ValueError: Unknown format for snapshot
+
     """
 
-    def __init__(self, str):
+    def __init__(self, str_val):
         "Create snapshot from string."
 
-        self.sn_str = str
-        tmp = str.split(':')
+        self.sn_str = str_val
+        tmp = str_val.split(':')
         if len(tmp) != 3:
-            raise Exception('Unknown format for snapshot')
+            raise ValueError('Unknown format for snapshot')
         self.xmin = int(tmp[0])
         self.xmax = int(tmp[1])
         self.txid_list = []
@@ -279,30 +296,57 @@ def _gen_list_insert(tbl, row, fields, qfields):
     fmt = "insert into %s (%s) values (%s);"
     return fmt % (tbl, ",".join(qfields), ",".join(tmp))
 
-def magic_insert(curs, tablename, data, fields = None, use_insert = 0, quoted_table = False):
+def magic_insert(curs, tablename, data, fields=None, use_insert=False, quoted_table=False):
     r"""Copy/insert a list of dict/list data to database.
 
-    If curs == None, then the copy or insert statements are returned
+    If curs is None, then the copy or insert statements are returned
     as string.  For list of dict the field list is optional, as its
     possible to guess them from dict keys.
 
     Example:
     >>> magic_insert(None, 'tbl', [[1, '1'], [2, '2']], ['col1', 'col2'])
     'COPY public.tbl (col1,col2) FROM STDIN;\n1\t1\n2\t2\n\\.\n'
+    >>> magic_insert(None, 'tbl', [[1, '1'], [2, '2']], ['col1', 'col2'], use_insert=True)
+    "insert into public.tbl (col1,col2) values ('1','1');\ninsert into public.tbl (col1,col2) values ('2','2');\n"
+    >>> magic_insert(None, 'tbl', [], ['col1', 'col2'])
+    >>> magic_insert(None, 'tbl."1"', [[1, '1'], [2, '2']], ['col1', 'col2'], quoted_table=True)
+    'COPY tbl."1" (col1,col2) FROM STDIN;\n1\t1\n2\t2\n\\.\n'
+    >>> magic_insert(None, 'tbl."1"', [[1, '1'], [2, '2']])
+    Traceback (most recent call last):
+        ...
+    Exception: Non-dict data needs field list
+    >>> magic_insert(None, 'a.tbl', [{'a':1}, {'a':2}])
+    'COPY a.tbl (a) FROM STDIN;\n1\n2\n\\.\n'
+    >>> magic_insert(None, 'a.tbl', [{'a':1}, {'a':2}], use_insert=True)
+    "insert into a.tbl (a) values ('1');\ninsert into a.tbl (a) values ('2');\n"
+
+    More fields than data:
+
+    >>> magic_insert(None, 'tbl', [[1, 'a']], ['col1', 'col2', 'col3'])
+    'COPY public.tbl (col1,col2,col3) FROM STDIN;\n1\ta\t\\N\n\\.\n'
+    >>> magic_insert(None, 'tbl', [[1, 'a']], ['col1', 'col2', 'col3'], use_insert=True)
+    "insert into public.tbl (col1,col2,col3) values ('1','a',null);\n"
+    >>> magic_insert(None, 'tbl', [{'a':1}, {'b':2}], ['a', 'b'], use_insert=False)
+    'COPY public.tbl (a,b) FROM STDIN;\n1\t\\N\n\\N\t2\n\\.\n'
+    >>> magic_insert(None, 'tbl', [{'a':1}, {'b':2}], ['a', 'b'], use_insert=True)
+    "insert into public.tbl (a,b) values ('1',null);\ninsert into public.tbl (a,b) values (null,'2');\n"
+
     """
     if len(data) == 0:
-        return
+        return None
+
+    fields = list(fields) # get rid of iterator
 
     # decide how to process
     if hasattr(data[0], 'keys'):
-        if fields == None:
+        if fields is None:
             fields = data[0].keys()
         if use_insert:
             row_func = _gen_dict_insert
         else:
             row_func = _gen_dict_copy
     else:
-        if fields == None:
+        if fields is None:
             raise Exception("Non-dict data needs field list")
         if use_insert:
             row_func = _gen_list_insert
@@ -316,8 +360,8 @@ def magic_insert(curs, tablename, data, fields = None, use_insert = 0, quoted_ta
         qtablename = skytools.quote_fqident(tablename)
 
     # init processing
-    buf = StringIO()
-    if curs == None and use_insert == 0:
+    buf = io.StringIO()
+    if curs is None and use_insert == 0:
         fmt = "COPY %s (%s) FROM STDIN;\n"
         buf.write(fmt % (qtablename, ",".join(qfields)))
 
@@ -327,7 +371,7 @@ def magic_insert(curs, tablename, data, fields = None, use_insert = 0, quoted_ta
         buf.write("\n")
 
     # if user needs only string, return it
-    if curs == None:
+    if curs is None:
         if use_insert == 0:
             buf.write("\\.\n")
         return buf.getvalue()
@@ -344,15 +388,15 @@ def magic_insert(curs, tablename, data, fields = None, use_insert = 0, quoted_ta
 # Full COPY of table from one db to another
 #
 
-class CopyPipe(object):
-    "Splits one big COPY to chunks."
+class CopyPipe(io.TextIOBase):
+    """Splits one big COPY to chunks.
+    """
 
-    def __init__(self, dstcurs, tablename = None, limit = 512*1024,
-                 sql_from = None):
+    def __init__(self, dstcurs, tablename=None, limit=512*1024, sql_from=None):
         self.tablename = tablename
         self.sql_from = sql_from
         self.dstcurs = dstcurs
-        self.buf = StringIO()
+        self.buf = io.StringIO()
         self.limit = limit
         #hook for new data, hook func should return new data
         #def write_hook(obj, data):
@@ -366,29 +410,22 @@ class CopyPipe(object):
         self.total_bytes = 0
 
     def write(self, data):
-        "New data from psycopg"
+        """New row from psycopg
+        """
         if self.write_hook:
             data = self.write_hook(self, data)
 
-        self.total_bytes += len(data)
-        self.total_rows += data.count("\n")
-
-        if self.buf.tell() >= self.limit:
-            pos = data.find('\n')
-            if pos >= 0:
-                # split at newline
-                p1 = data[:pos + 1]
-                p2 = data[pos + 1:]
-                self.buf.write(p1)
-                self.flush()
-
-                data = p2
+        self.total_bytes += len(data) # it's chars now...
+        self.total_rows += 1
 
         self.buf.write(data)
 
-    def flush(self):
-        "Send data out."
+        if self.buf.tell() >= self.limit:
+            self.flush()
 
+    def flush(self):
+        """Send data out.
+        """
         if self.flush_hook:
             self.flush_hook(self)
 
@@ -404,9 +441,9 @@ class CopyPipe(object):
         self.buf.truncate()
 
 
-def full_copy(tablename, src_curs, dst_curs, column_list = [], condition = None,
-        dst_tablename = None, dst_column_list = None,
-        write_hook = None, flush_hook = None):
+def full_copy(tablename, src_curs, dst_curs, column_list=(), condition=None,
+        dst_tablename=None, dst_column_list=None,
+        write_hook=None, flush_hook=None):
     """COPY table from one db to another."""
 
     # default dst table and dst columns to source ones
@@ -437,21 +474,12 @@ def full_copy(tablename, src_curs, dst_curs, column_list = [], condition = None,
     else:
         src = build_statement(tablename, column_list)
 
-    if hasattr(src_curs, 'copy_expert'):
-        sql_to = "COPY %s TO stdout" % src
-        sql_from = "COPY %s FROM stdin" % dst
-        buf = CopyPipe(dst_curs, sql_from = sql_from)
-        buf.write_hook = write_hook
-        buf.flush_hook = flush_hook
-        src_curs.copy_expert(sql_to, buf)
-    else:
-        if condition:
-            # regular psycopg copy_to generates invalid sql for subselect copy
-            raise Exception('copy_expert() is needed for conditional copy')
-        buf = CopyPipe(dst_curs, dst)
-        buf.write_hook = write_hook
-        buf.flush_hook = flush_hook
-        src_curs.copy_to(buf, src)
+    sql_to = "COPY %s TO stdout" % src
+    sql_from = "COPY %s FROM stdin" % dst
+    buf = CopyPipe(dst_curs, sql_from=sql_from)
+    buf.write_hook = write_hook
+    buf.flush_hook = flush_hook
+    src_curs.copy_expert(sql_to, buf)
     buf.flush()
 
     return (buf.total_bytes, buf.total_rows)
@@ -466,13 +494,13 @@ class DBObject(object):
     name = None
     sql = None
     sql_file = None
-    def __init__(self, name, sql = None, sql_file = None):
+    def __init__(self, name, sql=None, sql_file=None):
         """Generic dbobject init."""
         self.name = name
         self.sql = sql
         self.sql_file = sql_file
 
-    def create(self, curs, log = None):
+    def create(self, curs, log=None):
         """Create a dbobject."""
         if log:
             log.info('Installing %s' % self.name)
@@ -507,9 +535,9 @@ class DBTable(DBObject):
 
 class DBFunction(DBObject):
     """Handles db function."""
-    def __init__(self, name, nargs, sql = None, sql_file = None):
+    def __init__(self, name, nargs, sql=None, sql_file=None):
         """Function object - number of args is significant."""
-        DBObject.__init__(self, name, sql, sql_file)
+        super(DBFunction, self).__init__(name, sql, sql_file)
         self.nargs = nargs
     def exists(self, curs):
         """Does function exists."""
@@ -519,14 +547,14 @@ class DBLanguage(DBObject):
     """Handles db language."""
     def __init__(self, name):
         """PL object - creation happens with CREATE LANGUAGE."""
-        DBObject.__init__(self, name, sql = "create language %s" % name)
+        super(DBLanguage, self).__init__(name, sql="create language %s" % name)
     def exists(self, curs):
         """Does PL exists."""
         return exists_language(curs, self.name)
 
-def db_install(curs, list, log = None):
+def db_install(curs, obj_list, log=None):
     """Installs list of objects into db."""
-    for obj in list:
+    for obj in obj_list:
         if not obj.exists(curs):
             obj.create(curs, log)
         else:
@@ -540,8 +568,8 @@ def installer_find_file(filename):
         if os.path.isfile(filename):
             full_fn = filename
     else:
-        import skytools.installer_config
-        dir_list = skytools.installer_config.sql_locations
+        from skytools.installer_config import sql_locations
+        dir_list = sql_locations
         for fdir in dir_list:
             fn = os.path.join(fdir, filename)
             if os.path.isfile(fn):
@@ -567,21 +595,26 @@ def installer_apply_file(db, filename, log):
 # Generate INSERT/UPDATE/DELETE statement
 #
 
-def mk_insert_sql(row, tbl, pkey_list = None, field_map = None):
+def mk_insert_sql(row, tbl, pkey_list=None, field_map=None):
     """Generate INSERT statement from dict data.
 
-    >>> mk_insert_sql({'id': '1', 'data': None}, 'tbl')
-    "insert into public.tbl (data, id) values (null, '1');"
+    >>> from collections import OrderedDict
+    >>> row = OrderedDict([('id',1), ('data', None)])
+    >>> mk_insert_sql(row, 'tbl')
+    "insert into public.tbl (id, data) values ('1', null);"
+    >>> mk_insert_sql(row, 'tbl', ['x'], OrderedDict([('id', 'id_'), ('data', 'data_')]))
+    "insert into public.tbl (id_, data_) values ('1', null);"
+
     """
 
     col_list = []
     val_list = []
     if field_map:
-        for src, dst in field_map.iteritems():
+        for src, dst in field_map.items():
             col_list.append(skytools.quote_ident(dst))
             val_list.append(skytools.quote_literal(row[src]))
     else:
-        for c, v in row.iteritems():
+        for c, v in row.items():
             col_list.append(skytools.quote_ident(c))
             val_list.append(skytools.quote_literal(v))
     col_str = ", ".join(col_list)
@@ -589,11 +622,19 @@ def mk_insert_sql(row, tbl, pkey_list = None, field_map = None):
     return "insert into %s (%s) values (%s);" % (
                     skytools.quote_fqident(tbl), col_str, val_str)
 
-def mk_update_sql(row, tbl, pkey_list, field_map = None):
+def mk_update_sql(row, tbl, pkey_list, field_map=None):
     r"""Generate UPDATE statement from dict data.
 
     >>> mk_update_sql({'id': 0, 'id2': '2', 'data': 'str\\'}, 'Table', ['id', 'id2'])
     'update only public."Table" set data = E\'str\\\\\' where id = \'0\' and id2 = \'2\';'
+    >>> mk_update_sql({'id': 0, 'id2': '2', 'data': 'str\\'}, 'Table', ['id', 'id2'],
+    ...     {'id': '_id', 'id2': '_id2', 'data': '_data'})
+    'update only public."Table" set _data = E\'str\\\\\' where _id = \'0\' and _id2 = \'2\';'
+    >>> mk_update_sql({'id': 0, 'id2': '2', 'data': 'str\\'}, 'Table', [])
+    Traceback (most recent call last):
+        ...
+    Exception: update needs pkeys
+
     """
 
     if len(pkey_list) < 1:
@@ -609,13 +650,13 @@ def mk_update_sql(row, tbl, pkey_list, field_map = None):
         whe_list.append("%s = %s" % (col, val))
 
     if field_map:
-        for src, dst in field_map.iteritems():
+        for src, dst in field_map.items():
             if src not in pkmap:
                 col = skytools.quote_ident(dst)
                 val = skytools.quote_literal(row[src])
                 set_list.append("%s = %s" % (col, val))
     else:
-        for col, val in row.iteritems():
+        for col, val in row.items():
             if col not in pkmap:
                 col = skytools.quote_ident(col)
                 val = skytools.quote_literal(val)
@@ -623,8 +664,19 @@ def mk_update_sql(row, tbl, pkey_list, field_map = None):
     return "update only %s set %s where %s;" % (skytools.quote_fqident(tbl),
             ", ".join(set_list), " and ".join(whe_list))
 
-def mk_delete_sql(row, tbl, pkey_list, field_map = None):
-    """Generate DELETE statement from dict data."""
+def mk_delete_sql(row, tbl, pkey_list, field_map=None):
+    """Generate DELETE statement from dict data.
+
+    >>> mk_delete_sql({'a': 1, 'b':2, 'c':3}, 'tablename', ['a','b'])
+    "delete from only public.tablename where a = '1' and b = '2';"
+    >>> mk_delete_sql({'a': 1, 'b':2, 'c':3}, 'tablename', ['a','b'], {'a': 'aa', 'b':'bb'})
+    "delete from only public.tablename where aa = '1' and bb = '2';"
+    >>> mk_delete_sql({'a': 1, 'b':2, 'c':3}, 'tablename', [])
+    Traceback (most recent call last):
+        ...
+    Exception: delete needs pkeys
+
+    """
 
     if len(pkey_list) < 1:
         raise Exception("delete needs pkeys")
@@ -637,6 +689,3 @@ def mk_delete_sql(row, tbl, pkey_list, field_map = None):
     whe_str = " and ".join(whe_list)
     return "delete from only %s where %s;" % (skytools.quote_fqident(tbl), whe_str)
 
-if __name__ == '__main__':
-    import doctest
-    doctest.testmod()

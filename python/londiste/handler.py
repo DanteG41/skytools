@@ -4,7 +4,16 @@
 Per-table decision how to create trigger, copy data and apply events.
 """
 
-"""
+from __future__ import division, absolute_import, print_function
+
+import sys
+import json
+import logging
+import skytools
+import londiste.handlers
+
+_ = """
+
 -- redirect & create table
 partition by batch_time
 partition by date field
@@ -29,15 +38,10 @@ plain londiste:
 
 """
 
-import sys
-import logging
-import skytools
-import londiste.handlers
-
 __all__ = ['RowCache', 'BaseHandler', 'build_handler', 'EncodingValidator',
            'load_handler_modules', 'create_handler_string']
 
-class RowCache:
+class RowCache(object):
     def __init__(self, table_name):
         self.table_name = table_name
         self.keys = {}
@@ -65,7 +69,7 @@ class RowCache:
         fields = self.get_fields()
         skytools.magic_insert(curs, self.table_name, self.rows, fields)
 
-class BaseHandler:
+class BaseHandler(object):
     """Defines base API, does nothing.
     """
     handler_name = 'nop'
@@ -77,10 +81,10 @@ class BaseHandler:
         self.fq_table_name = skytools.quote_fqident(self.table_name)
         self.fq_dest_table = skytools.quote_fqident(self.dest_table)
         self.args = args
-        self._check_args (args)
+        self._check_args(args)
         self.conf = self.get_config()
 
-    def _parse_args_from_doc (self):
+    def _parse_args_from_doc(self):
         doc = self.__doc__ or ""
         params_descr = []
         params_found = False
@@ -89,30 +93,30 @@ class BaseHandler:
             if params_found:
                 if ln == "":
                     break
-                descr = ln.split (None, 1)
-                name, sep, rest = descr[0].partition('=')
+                descr = ln.split(None, 1)
+                name, sep, ___rest = descr[0].partition('=')
                 if sep:
                     expr = descr[0].rstrip(":")
                     text = descr[1].lstrip(":- \t")
                 else:
                     name, expr, text = params_descr.pop()
                     text += "\n" + ln
-                params_descr.append ((name, expr, text))
+                params_descr.append((name, expr, text))
             elif ln == "Parameters:":
                 params_found = True
         return params_descr
 
-    def _check_args (self, args):
+    def _check_args(self, args):
         self.valid_arg_names = []
         passed_arg_names = args.keys() if args else []
         args_from_doc = self._parse_args_from_doc()
         if args_from_doc:
-            self.valid_arg_names = list(zip(*args_from_doc)[0])
+            self.valid_arg_names = [arg[0] for arg in args_from_doc]
         invalid = set(passed_arg_names) - set(self.valid_arg_names)
         if invalid:
-            raise ValueError ("Invalid handler argument: %s" % list(invalid))
+            raise ValueError("Invalid handler argument: %s" % list(invalid))
 
-    def get_arg (self, name, value_list, default = None):
+    def get_arg(self, name, value_list, default=None):
         """ Return arg value or default; also check if value allowed. """
         default = default or value_list[0]
         val = type(default)(self.args.get(name, default))
@@ -120,7 +124,7 @@ class BaseHandler:
             raise Exception('Bad argument %s value %r' % (name, val))
         return val
 
-    def get_config (self):
+    def get_config(self):
         """ Process args dict (into handler config). """
         conf = skytools.dbdict()
         return conf
@@ -164,11 +168,17 @@ class BaseHandler:
         condition = self.get_copy_condition(src_curs, dst_curs)
         return skytools.full_copy(src_tablename, src_curs, dst_curs,
                                   column_list, condition,
-                                  dst_tablename = self.dest_table)
+                                  dst_tablename=self.dest_table)
 
     def needs_table(self):
         """Does the handler need the table to exist on destination."""
         return True
+
+    @classmethod
+    def load_conf(cls, cf):
+        """Load conf."""
+        pass
+
 
 class TableHandler(BaseHandler):
     """Default Londiste handler, inserts events into tables with plain SQL.
@@ -189,7 +199,7 @@ class TableHandler(BaseHandler):
     allow_sql_event = 1
 
     def __init__(self, table_name, args, dest_table):
-        BaseHandler.__init__(self, table_name, args, dest_table)
+        super(TableHandler, self).__init__(table_name, args, dest_table)
 
         enc = args.get('encoding')
         if enc:
@@ -197,8 +207,8 @@ class TableHandler(BaseHandler):
         else:
             self.encoding_validator = None
 
-    def get_config (self):
-        conf = BaseHandler.get_config(self)
+    def get_config(self):
+        conf = super(TableHandler, self).get_config()
         conf.ignore_truncate = self.get_arg('ignore_truncate', [0, 1], 0)
         return conf
 
@@ -210,9 +220,14 @@ class TableHandler(BaseHandler):
             fmt = self.sql_command[ev.type]
             sql = fmt % (fqname, row)
         else:
-            # urlenc event
-            pklist = ev.type[2:].split(',')
-            op = ev.type[0]
+            if ev.type[0] == '{':
+                jtype = json.loads(ev.type)
+                pklist = jtype['pkey']
+                op = jtype['op'][0]
+            else:
+                # urlenc event
+                pklist = ev.type[2:].split(',')
+                op = ev.type[0]
             tbl = self.dest_table
             if op == 'I':
                 sql = skytools.mk_insert_sql(row, tbl, pklist)
@@ -235,6 +250,10 @@ class TableHandler(BaseHandler):
             if self.encoding_validator:
                 return self.encoding_validator.validate_string(ev.data, self.table_name)
             return ev.data
+        elif ev.data[0] == '{':
+            row = json.loads(ev.data)
+            # FIXME: encoding_validator?
+            return row
         else:
             row = skytools.db_urldecode(ev.data)
             if self.encoding_validator:
@@ -254,16 +273,16 @@ class TableHandler(BaseHandler):
         condition = self.get_copy_condition(src_curs, dst_curs)
         return skytools.full_copy(src_tablename, src_curs, dst_curs,
                                   column_list, condition,
-                                  dst_tablename = self.dest_table,
-                                  write_hook = _write_hook)
+                                  dst_tablename=self.dest_table,
+                                  write_hook=_write_hook)
 
 
 #------------------------------------------------------------------------------
 # ENCODING VALIDATOR
 #------------------------------------------------------------------------------
 
-class EncodingValidator:
-    def __init__(self, log, encoding = 'utf-8', replacement = u'\ufffd'):
+class EncodingValidator(object):
+    def __init__(self, log, encoding='utf-8', replacement=u'\ufffd'):
         """validates the correctness of given encoding. when data contains
         illegal symbols, replaces them with <replacement> and logs the
         incident
@@ -327,19 +346,17 @@ _handler_map = {
     'londiste': TableHandler,
 }
 
-_handler_list = _handler_map.keys()
-
-def register_handler_module(modname):
+def register_handler_module(modname, cf):
     """Import and module and register handlers."""
     try:
         __import__(modname)
     except ImportError:
-        print "Failed to load handler module: %s" % (modname,)
+        print("Failed to load handler module: %s" % (modname,))
         return
     m = sys.modules[modname]
     for h in m.__londiste_handlers__:
+        h.load_conf(cf)
         _handler_map[h.handler_name] = h
-        _handler_list.append(h.handler_name)
 
 def _parse_arglist(arglist):
     args = {}
@@ -394,16 +411,11 @@ def load_handler_modules(cf):
     lst += cf.getlist('handler_modules', [])
 
     for m in lst:
-        register_handler_module(m)
+        register_handler_module(m, cf)
 
 def show(mods):
     if not mods:
-        if 0:
-            names = _handler_map.keys()
-            names.sort()
-        else:
-            names = _handler_list
-        for n in names:
+        for n in _handler_map:
             kls = _handler_map[n]
             desc = kls.__doc__ or ''
             if desc:

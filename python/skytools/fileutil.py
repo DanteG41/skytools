@@ -10,18 +10,27 @@
 >>> os.remove(pidfn)
 """
 
+from __future__ import division, absolute_import, print_function
+
 import sys
 import os
 import errno
 
 __all__ = ['write_atomic', 'signal_pidfile']
 
+try:
+    unicode
+except NameError:
+    unicode = str   # noqa
+
 # non-win32
-def write_atomic(fn, data, bakext=None, mode='b'):
+def write_atomic_unix(fn, data, bakext=None, mode='b'):
     """Write file with rename."""
 
     if mode not in ['', 'b', 't']:
         raise ValueError("unsupported fopen mode")
+    if mode == 'b' and isinstance(data, unicode):
+        data = data.encode('utf8')
 
     # write new data to tmp file
     fn2 = fn + '.new'
@@ -36,12 +45,12 @@ def write_atomic(fn, data, bakext=None, mode='b'):
         fnb = fn + bakext
         try:
             os.unlink(fnb)
-        except OSError, e:
+        except OSError as e:
             if e.errno != errno.ENOENT:
                 raise
         try:
             os.link(fn, fnb)
-        except OSError, e:
+        except OSError as e:
             if e.errno != errno.ENOENT:
                 raise
 
@@ -75,13 +84,10 @@ def signal_pidfile(pidfile, sig):
             return win32_detect_pid(pid)
         os.kill(pid, sig)
         return True
-    except IOError, ex:
-        if ex.errno != errno.ENOENT:
+    except (IOError, OSError) as ex:
+        if ex.errno not in (errno.ESRCH, errno.ENOENT):
             raise
-    except OSError, ex:
-        if ex.errno != errno.ESRCH:
-            raise
-    except ValueError, ex:
+    except ValueError as ex:
         # this leaves slight race when someone is just creating the file,
         # but more common case is old empty file.
         if not ln:
@@ -108,7 +114,7 @@ def win32_detect_pid(pid):
 
     # query pid exit code
     h = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid)
-    if h == None:
+    if h is None:
         err = k.GetLastError()
         if err == ERROR_INVALID_PARAMETER:
             return False
@@ -139,12 +145,12 @@ def win32_write_atomic(fn, data, bakext=None, mode='b'):
         fnb = fn + bakext
         try:
             os.remove(fnb)
-        except OSError, e:
+        except OSError as e:
             if e.errno != errno.ENOENT:
                 raise
         try:
             os.rename(fn, fnb)
-        except OSError, e:
+        except OSError as e:
             if e.errno != errno.ENOENT:
                 raise
     else:
@@ -158,8 +164,6 @@ def win32_write_atomic(fn, data, bakext=None, mode='b'):
 
 if sys.platform == 'win32':
     write_atomic = win32_write_atomic
-
-if __name__ == '__main__':
-    import doctest
-    doctest.testmod()
+else:
+    write_atomic = write_atomic_unix
 

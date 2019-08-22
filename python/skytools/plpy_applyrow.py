@@ -3,11 +3,13 @@
 PLPY helper module for applying row events from pgq.logutriga().
 """
 
+from __future__ import division, absolute_import, print_function
 
-import plpy
+try:
+    import plpy
+except ImportError:
+    pass
 
-import pkgloader
-pkgloader.require('skytools', '3.0')
 import skytools
 
 ## TODO: automatic fkey detection
@@ -32,7 +34,7 @@ def colfilter_full(rnew, rold):
 
 def colfilter_changed(rnew, rold):
     res = {}
-    for k, v in rnew:
+    for k, _ in rnew:
         if rnew[k] != rold[k]:
             res[k] = rnew[k]
     return res
@@ -50,18 +52,18 @@ def canapply_tstamp_helper(rnew, rold, tscol):
     return tnew > told
 
 def applyrow(tblname, ev_type, new_row,
-             backup_row = None,
-             alt_pkey_cols = None,
-             fkey_cols = None,
-             fkey_ref_table = None,
-             fkey_ref_cols = None,
-             fn_canapply = canapply_dummy,
-             fn_colfilter = colfilter_full):
+             backup_row=None,
+             alt_pkey_cols=None,
+             fkey_cols=None,
+             fkey_ref_table=None,
+             fkey_ref_cols=None,
+             fn_canapply=canapply_dummy,
+             fn_colfilter=colfilter_full):
     """Core logic.  Actual decisions will be done in callback functions.
 
     - [IUD]: If row referenced by fkey does not exist, event is not applied
     - If pkey does not exist but alt_pkey does, row is not applied.
-    
+
     @param tblname: table name, schema-qualified
     @param ev_type: [IUD]:pkey1,pkey2
     @param alt_pkey_cols: list of alternatice columns to consuder
@@ -198,8 +200,8 @@ def ts_conflict_handler(gd, args):
     ev_data = args[2]
     ev_extra1 = args[3]
     ev_extra2 = args[4]
-    ev_extra3 = args[5]
-    ev_extra4 = args[6]
+    #ev_extra3 = args[5]
+    #ev_extra4 = args[6]
     altpk = None
     if 'altpk' in conf:
         altpk = conf['altpk'].split(',')
@@ -208,10 +210,10 @@ def ts_conflict_handler(gd, args):
         return canapply_tstamp_helper(rnew, rold, timefield)
 
     return applyrow(ev_extra1, ev_type, ev_data,
-                    backup_row = ev_extra2,
-                    alt_pkey_cols = altpk,
-                    fkey_ref_table = conf.get('fkey_ref_table'),
-                    fkey_ref_cols = conf.get('fkey_ref_cols'),
-                    fkey_cols = conf.get('fkey_cols'),
-                    fn_canapply = ts_canapply)
+                    backup_row=ev_extra2,
+                    alt_pkey_cols=altpk,
+                    fkey_ref_table=conf.get('fkey_ref_table'),
+                    fkey_ref_cols=conf.get('fkey_ref_cols'),
+                    fkey_cols=conf.get('fkey_cols'),
+                    fn_canapply=ts_canapply)
 
